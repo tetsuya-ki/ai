@@ -29,6 +29,7 @@ Misskey用の日本語Botです。
 	"aichatRandomTalkEnabled": "ランダムにaichatを発動し話しかける機能を有効にする場合は true を入れる (無効にする場合は false(いずれも二重引用符(”)は不要))",
 	"aichatRandomTalkProbability": "ランダムにaichatを発動し話しかける機能の確率(1以下の小数点を含む数値(0.01など。1に近づくほど発動しやすい))",
 	"aichatRandomTalkIntervalMinutes": "ランダムトーク間隔(分)。指定した時間ごとにタイムラインを取得し、適当に選んだ人にaichatする(1の場合1分ごと実行)。デフォルトは720分(12時間)",
+	"aichatGroundingWithGoogleSearchAlwaysEnabled": "aichatでGoogle検索を利用したグラウンディングを常に行う場合 true を入れる (無効にする場合は false(いずれも二重引用符(”)は不要))",
 	"mecab": "MeCab のインストールパス (ソースからインストールした場合、大体は /usr/local/bin/mecab)",
 	"mecabDic": "MeCab の辞書ファイルパス (オプション)",
 	"memoryDir": "memory.jsonの保存先（オプション、デフォルトは'.'（レポジトリのルートです））"
@@ -58,6 +59,7 @@ Misskey用の日本語Botです。
 	"aichatRandomTalkEnabled": "ランダムにaichatを発動し話しかける機能を有効にする場合は true を入れる (無効にする場合は false(いずれも二重引用符(”)は不要))",
 	"aichatRandomTalkProbability": "ランダムにaichatを発動し話しかける機能の確率(1以下の小数点を含む数値(0.01など。1に近づくほど発動しやすい))",
 	"aichatRandomTalkIntervalMinutes": "ランダムトーク間隔(分)。指定した時間ごとにタイムラインを取得し、適当に選んだ人にaichatする(1の場合1分ごと実行)。デフォルトは720分(12時間)",
+	"aichatGroundingWithGoogleSearchAlwaysEnabled": "aichatでGoogle検索を利用したグラウンディングを常に行う場合 true を入れる (無効にする場合は false(いずれも二重引用符(”)は不要))",
 	"mecab": "/usr/bin/mecab",
 	"mecabDic": "/usr/lib/x86_64-linux-gnu/mecab/dic/mecab-ipadic-neologd/",
 	"memoryDir": "data"

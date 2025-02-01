@@ -13,6 +13,7 @@
 	"aichatRandomTalkEnabled": true,
 	"aichatRandomTalkProbability": 0.01,
 	"aichatRandomTalkIntervalMinutes": 720,
+	"aichatGroundingWithGoogleSearchAlwaysEnabled": false,
 	"mecab": "/usr/bin/mecab",
 	"mecabDic": "/usr/lib/x86_64-linux-gnu/mecab/dic/mecab-ipadic-neologd/",
 	"memoryDir": "data"

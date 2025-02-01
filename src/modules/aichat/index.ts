@@ -14,9 +14,10 @@ type AiChat = {
 	prompt: string;
 	api: string;
 	key: string;
-	history?: { role: string; content: string }[];
-	grounding?: boolean;
+	fromMention: boolean;
 	friendName?: string;
+	grounding?: boolean;
+	history?: { role: string; content: string }[];
 };
 type base64File = {
 	type: string;
@@ -52,6 +53,7 @@ type AiChatHist = {
 	postId: string;
 	createdAt: number;
 	type: string;
+	fromMention: boolean;
 	api?: string;
 	grounding?: boolean;
 	history?: {
@@ -116,6 +118,7 @@ export default class extends Module {
 		this.log('aichatRandomTalkEnabled:' + config.aichatRandomTalkEnabled);
 		this.log('randomTalkProbability:' + this.randomTalkProbability);
 		this.log('randomTalkIntervalMinutes:' + (this.randomTalkIntervalMinutes / (60 * 1000)));
+		this.log('aichatGroundingWithGoogleSearchAlwaysEnabled:' + config.aichatGroundingWithGoogleSearchAlwaysEnabled);
 
 		// 定期的にデータを取得しaichatRandomTalkを行う
 		if (config.aichatRandomTalkEnabled) {
@@ -146,6 +149,10 @@ export default class extends Module {
 		// 名前を伝えておく
 		if (aiChat.friendName != undefined) {
 			systemInstructionText += 'なお、会話相手の名前は' + aiChat.friendName + 'とする。';
+		}
+		// ランダムトーク機能(利用者が意図(メンション)せず発動)の場合、ちょっとだけ配慮しておく
+		if (!aiChat.fromMention) {
+			systemInstructionText += 'これらのメッセージは、あなたに対するメッセージではないことを留意し、返答すること(会話相手は突然話しかけられた認識している)。';
 		}
 		// URLから情報を取得
 		if (aiChat.question !== undefined) {
@@ -259,7 +266,7 @@ export default class extends Module {
 					if (res_data.candidates[0].hasOwnProperty('groundingMetadata')) {
 						// 参考サイト情報
 						if (res_data.candidates[0].groundingMetadata.hasOwnProperty('groundingChunks')) {
-							this.log(res_data.candidates[0].groundingMetadata.groundingChunks.length);
+							// 参考サイトが多すぎる場合があるので、3つに制限
 							let checkMaxLength = res_data.candidates[0].groundingMetadata.groundingChunks.length;
 							if (res_data.candidates[0].groundingMetadata.groundingChunks.length > 3) {
 								checkMaxLength = 3;
@@ -408,7 +415,8 @@ export default class extends Module {
 		const current : AiChatHist = {
 			postId: msg.id,
 			createdAt: Date.now(),// 適当なもの
-			type: type
+			type: type,
+			fromMention: true,
 		};
 		// 引用している場合、情報を取得しhistoryとして与える
 		if (msg.quoteId) {
@@ -540,7 +548,8 @@ export default class extends Module {
 		const current : AiChatHist = {
 			postId: choseNote.id,
 			createdAt: Date.now(),// 適当なもの
-			type: TYPE_GEMINI
+			type: TYPE_GEMINI,		// 別のAPIをデフォルトにしてもよい
+			fromMention: false,		// ランダムトークの場合はfalseとする
 		};
 		// AIに問い合わせ
 		let targetedMessage = choseNote;
@@ -567,7 +576,6 @@ export default class extends Module {
 		}
 		const reName = RegExp(this.name, 'i');
 		let reKigoType = RegExp(KIGO + exist.type, 'i');
-		let reGroundingFlg = RegExp(GROUNDING_TARGET, 'i');//groundingをお試し
 		const extractedText = msg.extractedText;
 		if (extractedText == undefined || extractedText.length == 0) return false;
 
@@ -582,6 +590,10 @@ export default class extends Module {
 
 		// groudingサポート
 		if (msg.includes([GROUNDING_TARGET])) {
+			exist.grounding = true;
+		}
+		// 設定で、デフォルトgroundingがONの場合、メンションから来たときは強制的にgroundingをONとする(ランダムトークの場合は勝手にGoogle検索するのちょっと気が引けるため...)
+		if (exist.fromMention && config.aichatGroundingWithGoogleSearchAlwaysEnabled) {
 			exist.grounding = true;
 		}
 
@@ -614,7 +626,8 @@ export default class extends Module {
 					api: GEMINI_20_FLASH_API,
 					key: config.geminiProApiKey,
 					history: exist.history,
-					friendName: friendName
+					friendName: friendName,
+					fromMention: exist.fromMention
 				};
 				if (exist.api) {
 					aiChat.api = exist.api;
@@ -637,7 +650,8 @@ export default class extends Module {
 					api: PLAMO_API,
 					key: config.pLaMoApiKey,
 					history: exist.history,
-					friendName: friendName
+					friendName: friendName,
+					fromMention: exist.fromMention
 				};
 				text = await this.genTextByPLaMo(aiChat);
 				break;
@@ -671,7 +685,8 @@ export default class extends Module {
 				type: exist.type,
 				api: aiChat.api,
 				history: exist.history,
-				friendName: friendName
+				grounding: exist.grounding,
+				fromMention: exist.fromMention,
 			});
 
 			this.log('Subscribe&Set Timer...');
