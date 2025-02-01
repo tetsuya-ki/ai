@@ -15,6 +15,7 @@ type AiChat = {
 	api: string;
 	key: string;
 	history?: { role: string; content: string }[];
+	grounding?: boolean;
 	friendName?: string;
 };
 type base64File = {
@@ -41,12 +42,18 @@ type GeminiContents = {
 	role: string;
 	parts: GeminiParts;
 };
+type GeminiOptions = {
+	contents?: GeminiContents[],
+	systemInstruction?: GeminiSystemInstruction,
+	tools?: [{}]
+};
 
 type AiChatHist = {
 	postId: string;
 	createdAt: number;
 	type: string;
 	api?: string;
+	grounding?: boolean;
 	history?: {
 		role: string;
 		content: string;
@@ -75,6 +82,7 @@ const TYPE_GEMINI = 'gemini';
 const GEMINI_PRO = 'gemini-pro';
 const GEMINI_FLASH = 'gemini-flash';
 const TYPE_PLAMO = 'plamo';
+const GROUNDING_TARGET = 'ggg';
 
 const GEMINI_20_FLASH_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent';
 // const GEMINI_15_FLASH_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
@@ -209,34 +217,70 @@ export default class extends Module {
 		}
 		contents.push({role: 'user', parts: parts});
 
+		let geminiOptions:GeminiOptions = {
+			contents: contents,
+			systemInstruction: systemInstruction,
+		};
+		// gemini api grounding support. ref:https://github.com/google-gemini/cookbook/blob/09f3b17df1751297798c2b498cae61c6bf710edc/quickstarts/Search_Grounding.ipynb
+		if (aiChat.grounding) {
+			geminiOptions.tools = [{google_search:{}}];
+		}
 		let options = {
 			url: aiChat.api,
 			searchParams: {
 				key: aiChat.key,
 			},
-			json: {
-				contents: contents,
-				systemInstruction: systemInstruction,
-			},
+			json: geminiOptions,
 		};
+
 		this.log(JSON.stringify(options));
 		let res_data:any = null;
+		let responseText:string = '';
 		try {
 			res_data = await got.post(options,
 				{parseJson: (res: string) => JSON.parse(res)}).json();
 			this.log(JSON.stringify(res_data));
 			if (res_data.hasOwnProperty('candidates')) {
-				if (res_data.candidates.length > 0) {
+				if (res_data.candidates?.length > 0) {
+					// 結果を取得
 					if (res_data.candidates[0].hasOwnProperty('content')) {
 						if (res_data.candidates[0].content.hasOwnProperty('parts')) {
 							if (res_data.candidates[0].content.parts.length > 0) {
-								if (res_data.candidates[0].content.parts[0].hasOwnProperty('text')) {
-									const responseText = res_data.candidates[0].content.parts[0].text;
-									return responseText;
+								for (let i = 0; i < res_data.candidates[0].content.parts.length; i++) {
+									if (res_data.candidates[0].content.parts[i].hasOwnProperty('text')) {
+										responseText += res_data.candidates[0].content.parts[i].text;
+									}
 								}
 							}
 						}
 					}
+					// groundingMetadataを取得
+					let groundingMetadata = '';
+					if (res_data.candidates[0].hasOwnProperty('groundingMetadata')) {
+						// 参考サイト情報
+						if (res_data.candidates[0].groundingMetadata.hasOwnProperty('groundingChunks')) {
+							this.log(res_data.candidates[0].groundingMetadata.groundingChunks.length);
+							let checkMaxLength = res_data.candidates[0].groundingMetadata.groundingChunks.length;
+							if (res_data.candidates[0].groundingMetadata.groundingChunks.length > 3) {
+								checkMaxLength = 3;
+							}
+							for (let i = 0; i < checkMaxLength; i++) {
+								if (res_data.candidates[0].groundingMetadata.groundingChunks[i].hasOwnProperty('web')) {
+									if (res_data.candidates[0].groundingMetadata.groundingChunks[i].web.hasOwnProperty('uri')
+											&& res_data.candidates[0].groundingMetadata.groundingChunks[i].web.hasOwnProperty('title')) {
+										groundingMetadata += `参考(${i+1}): [${res_data.candidates[0].groundingMetadata.groundingChunks[i].web.title}](${res_data.candidates[0].groundingMetadata.groundingChunks[i].web.uri})\n`;
+									}
+								}
+							}
+						}
+						// 検索ワード
+						if (res_data.candidates[0].groundingMetadata.hasOwnProperty('webSearchQueries')) {
+							if (res_data.candidates[0].groundingMetadata.webSearchQueries.length > 0) {
+								groundingMetadata += '検索ワード: ' + res_data.candidates[0].groundingMetadata.webSearchQueries.join(',') + '\n';
+							}
+						}
+					}
+					responseText += groundingMetadata;
 				}
 			}
 		} catch (err: unknown) {
@@ -245,7 +289,7 @@ export default class extends Module {
 				this.log(`${err.name}\n${err.message}\n${err.stack}`);
 			}
 		}
-		return null;
+		return responseText;
 	}
 
 	@bindThis
@@ -516,13 +560,14 @@ export default class extends Module {
 
 	@bindThis
 	private async handleAiChat(exist: AiChatHist, msg: Message) {
-		let text: string, aiChat: AiChat;
+		let text: string | null, aiChat: AiChat;
 		let prompt: string = '';
 		if (config.prompt) {
 			prompt = config.prompt;
 		}
 		const reName = RegExp(this.name, 'i');
 		let reKigoType = RegExp(KIGO + exist.type, 'i');
+		let reGroundingFlg = RegExp(GROUNDING_TARGET, 'i');//groundingをお試し
 		const extractedText = msg.extractedText;
 		if (extractedText == undefined || extractedText.length == 0) return false;
 
@@ -533,6 +578,11 @@ export default class extends Module {
 		} else if (msg.includes([KIGO + GEMINI_PRO])) {
 			exist.api = GEMINI_15_PRO_API;
 			reKigoType = RegExp(KIGO + GEMINI_PRO, 'i');
+		}
+
+		// groudingサポート
+		if (msg.includes([GROUNDING_TARGET])) {
+			exist.grounding = true;
 		}
 
 		const friend: Friend | null = this.ai.lookupFriend(msg.userId);
@@ -548,6 +598,7 @@ export default class extends Module {
 		const question = extractedText
 							.replace(reName, '')
 							.replace(reKigoType, '')
+							.replace(GROUNDING_TARGET, '')
 							.trim();
 		switch (exist.type) {
 			case TYPE_GEMINI:
@@ -566,7 +617,10 @@ export default class extends Module {
 					friendName: friendName
 				};
 				if (exist.api) {
-					aiChat.api = exist.api
+					aiChat.api = exist.api;
+				}
+				if (exist.grounding) {
+					aiChat.grounding = exist.grounding;
 				}
 				text = await this.genTextByGemini(aiChat, base64Files);
 				break;
@@ -593,7 +647,7 @@ export default class extends Module {
 				return false;
 		}
 
-		if (text == null) {
+		if (text == null || text == '') {
 			this.log('The result is invalid. It seems that tokens and other items need to be reviewed.')
 			msg.reply(serifs.aichat.error(exist.type));
 			return false;
