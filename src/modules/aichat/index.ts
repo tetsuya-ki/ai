@@ -145,7 +145,7 @@ export default class extends Module {
 			minute: '2-digit'
 		});
 		// 設定のプロンプトに加え、現在時刻を渡す
-		let systemInstructionText = aiChat.prompt + '。また、現在日時は' + now + 'であり、これは回答の参考にし、時刻を聞かれるまで時刻情報は提供しないこと(なお、他の日時は無効とすること)。';
+		let systemInstructionText = aiChat.prompt + 'また、現在日時は' + now + 'であり、これは回答の参考にし、時刻を聞かれるまで時刻情報は提供しないこと(なお、他の日時は無効とすること)。';
 		// 名前を伝えておく
 		if (aiChat.friendName != undefined) {
 			systemInstructionText += 'なお、会話相手の名前は' + aiChat.friendName + 'とする。';
@@ -515,11 +515,28 @@ export default class extends Module {
 		// ランダムに選択
 		const choseNote = interestedNotes[Math.floor(Math.random() * interestedNotes.length)];
 
-		// msg.idをもとにnotes/conversationを呼び出し、会話中のidかチェック
-		const conversationData = await this.ai.api('notes/conversation', { noteId: choseNote.id });
-
 		// aichatHistに該当のポストが見つかった場合は会話中のためaichatRandomTalkでは対応しない
 		let exist : AiChatHist | null = null;
+
+		// 選択されたノート自体が会話中のidかチェック
+		exist = this.aichatHist.findOne({
+			postId: choseNote.id
+		});
+		if (exist != null) return false;
+
+		// msg.idをもとにnotes/childrenを呼び出し、会話中のidかチェック
+		const childrenData = await this.ai.api('notes/children', { noteId: choseNote.id });
+		if (childrenData != undefined) {
+			for (const message of childrenData) {
+				exist = this.aichatHist.findOne({
+					postId: message.id
+				});
+				if (exist != null) return false;
+			}
+		}
+
+		// msg.idをもとにnotes/conversationを呼び出し、会話中のidかチェック
+		const conversationData = await this.ai.api('notes/conversation', { noteId: choseNote.id });
 		if (conversationData != undefined) {
 			for (const message of conversationData) {
 				exist = this.aichatHist.findOne({
