@@ -154,6 +154,10 @@ export default class extends Module {
 		if (!aiChat.fromMention) {
 			systemInstructionText += 'これらのメッセージは、あなたに対するメッセージではないことを留意し、返答すること(会話相手は突然話しかけられた認識している)。';
 		}
+		// グラウンディングについてもsystemInstructionTextに追記(こうしないとあまり使わないので)
+		if (aiChat.grounding) {
+			systemInstructionText += '返答のルール2:Google search with grounding.';
+		}
 		// URLから情報を取得
 		if (aiChat.question !== undefined) {
 			const urlexp = RegExp('(https?://[a-zA-Z0-9!?/+_~=:;.,*&@#$%\'-]+)', 'g');
