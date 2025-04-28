@@ -282,6 +282,15 @@ export default class extends Module {
 								for (let i = 0; i < res_data.candidates[0].content.parts.length; i++) {
 									if (res_data.candidates[0].content.parts[i].hasOwnProperty('text')) {
 										responseText += res_data.candidates[0].content.parts[i].text;
+										if (/\n参考\(1\)/.test(responseText)) {
+											responseText = responseText.split('\n参考(1)')[0];
+											this.log('**LLMが気を利かせてよくわからない参考をつけているので削除**\n' + responseText.replaceAll(/\n/g, '<br>'));
+										}
+										// 長すぎるパターンはここで短くしておく
+										if (responseText.length > 2000) {
+											responseText.slice(0, 2000) + '(...省略されました...)';
+											this.log('長すぎたため、途中から省略:' + responseText.replaceAll(/\n/g, '<br>'));
+										}
 									}
 								}
 							}
@@ -308,7 +317,12 @@ export default class extends Module {
 								if (res_data.candidates[0].groundingMetadata.groundingChunks[i].hasOwnProperty('web')) {
 									if (res_data.candidates[0].groundingMetadata.groundingChunks[i].web.hasOwnProperty('uri')
 											&& res_data.candidates[0].groundingMetadata.groundingChunks[i].web.hasOwnProperty('title')) {
-										groundingMetadata += `参考(${i+1}): [${res_data.candidates[0].groundingMetadata.groundingChunks[i].web.title}](${res_data.candidates[0].groundingMetadata.groundingChunks[i].web.uri})\n`;
+										// 300文字を超えないリンクの場合のみ載せる
+										if (res_data.candidates[0].groundingMetadata.groundingChunks[i].web.uri.length < 300) {
+											groundingMetadata += `参考(${i+1}): [${res_data.candidates[0].groundingMetadata.groundingChunks[i].web.title}](${res_data.candidates[0].groundingMetadata.groundingChunks[i].web.uri})\n`;
+										} else {
+											groundingMetadata += `参考(${i+1}): ${res_data.candidates[0].groundingMetadata.groundingChunks[i].web.title}(リンクなし)\n`;
+										}
 									}
 								}
 							}
@@ -790,8 +804,12 @@ export default class extends Module {
 			.replaceAll(/ font\]/g, ' ')// fontの使い方の勘違いを訂正
 			.replaceAll(/\$\[fg\.color=\w{3,} \]/g, '')// 何も文字がないものは削除
 			.replaceAll(/\$$/g, '')// 末尾の$マークはなにかのミスと思われるため削除
-			.replaceAll(/\}\$ /g, ']')// "}$ "も]のミスだと思われる...
+			.replaceAll(/[\}\]]\$ /g, ']')// "}$ "や"]$"も]のミスだと思われる...
 			.replaceAll(/>\[(\w{2}).color/g, '$[$1.color')// colorの指定ミスを訂正
+			.replaceAll(/\${2,}/g, '')// $が2つ以上続くのはミス
+			.replaceAll(/\$\./g, '')// $.はたぶんミス
+			.replaceAll(/\$\]/g, ']')// "$]"を訂正
+			.replaceAll(/\\text\{(.+?)\}/ig, '$1')// 謎の\text{xxx}構文を削除
 			.replaceAll(/XXXXXXXXXXXX/g, '')
 		return message;
 	}
