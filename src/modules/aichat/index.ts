@@ -49,6 +49,14 @@ type GeminiOptions = {
 	tools?: [{}]
 };
 
+type CallGeminiOptions  = {
+	url: string,
+	searchParams: {
+		key: string,
+	},
+	json: GeminiOptions,
+};
+
 type AiChatHist = {
 	postId: string;
 	createdAt: number;
@@ -86,9 +94,10 @@ const GEMINI_FLASH = 'gemini-flash';
 const TYPE_PLAMO = 'plamo';
 const GROUNDING_TARGET = 'ggg';
 
-const GEMINI_20_FLASH_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent';
-// const GEMINI_15_FLASH_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
-const GEMINI_15_PRO_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent';
+const GEMINI_25_FLASH_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:generateContent';
+const GEMINI_20_FLASH_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
+const GEMINI_25_PRO_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro-exp-03-25:generateContent';
+//const GEMINI_15_PRO_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent';
 const PLAMO_API = 'https://platform.preferredai.jp/api/completion/v1/chat/completions';
 
 const RANDOMTALK_DEFAULT_PROBABILITY = 0.02;// デフォルトのrandomTalk確率
@@ -144,8 +153,10 @@ export default class extends Module {
 			hour: '2-digit',
 			minute: '2-digit'
 		});
-		// 設定のプロンプトに加え、現在時刻を渡す
-		let systemInstructionText = aiChat.prompt + 'また、現在日時は' + now + 'であり、これは回答の参考にし、時刻を聞かれるまで時刻情報は提供しないこと(なお、他の日時は無効とすること)。';
+		// 設定のプロンプトに加え、Misskeyの注意事項やMFM記法について説明
+		let systemInstructionText = aiChat.prompt + 'ただし、リスト記法はMisskeyが対応しておらず、パーサーが壊れるため使用禁止です。列挙する場合は「・」を使ってください。さらにMisskeyではMFM記法を使うため、次のルールを守ってください。引用は行頭に>、フォント変更は$[font.serif テキスト](明朝体風)、$[font.monospace テキスト](等幅フォント)、$[font.cursive テキスト](英数字のみ筆記体)、$[font.fantasy テキスト](英数字のみファンタジー体)が使えます。文字色変更は$[fg.color=f00 テキスト]、背景色変更は$[bg.color=0f0 テキスト]、文字拡大は$[x2 テキスト]、コード表現はバッククオートで囲って`コード`とします。$[...]形式はコマンド、スペース、本文の順に必ず書き、コード表現以外のMFM記法は自由に組み合わせ可能です。背景色(bg.color)は明るい色を選び、文字色(fg.color)は人間が読みやすい中間色（暗すぎず明るすぎない色）を選んでください。'
+		// LLMは現在時刻を把握していないため、時刻情報を渡す
+		systemInstructionText +='また、現在日時は' + now + 'であり、これは回答の参考にし、時刻を聞かれるまで時刻情報は提供しないこと(なお、他の日時は無効とすること)。';
 		// 名前を伝えておく
 		if (aiChat.friendName != undefined) {
 			systemInstructionText += 'なお、会話相手の名前は' + aiChat.friendName + 'とする。';
@@ -236,7 +247,7 @@ export default class extends Module {
 		if (aiChat.grounding) {
 			geminiOptions.tools = [{google_search:{}}];
 		}
-		let options = {
+		let options: CallGeminiOptions = {
 			url: aiChat.api,
 			searchParams: {
 				key: aiChat.key,
@@ -245,9 +256,20 @@ export default class extends Module {
 		};
 
 		this.log(JSON.stringify(options));
-		let res_data:any = null;
+		let responseText:string = await this.genTextByGeminiCore(options);
+		// 結果が空文字だった場合、Gemini 2.0 Flashで再実行
+		if (responseText === '') {
+			options.url = GEMINI_20_FLASH_API;
+			responseText = await this.genTextByGeminiCore(options);
+		}
+		return responseText;
+	}
+
+	@bindThis
+	private async genTextByGeminiCore(options: CallGeminiOptions) {
 		let responseText:string = '';
 		try {
+			let res_data:any = null;
 			res_data = await got.post(options,
 				{parseJson: (res: string) => JSON.parse(res)}).json();
 			this.log(JSON.stringify(res_data));
@@ -272,8 +294,15 @@ export default class extends Module {
 						if (res_data.candidates[0].groundingMetadata.hasOwnProperty('groundingChunks')) {
 							// 参考サイトが多すぎる場合があるので、3つに制限
 							let checkMaxLength = res_data.candidates[0].groundingMetadata.groundingChunks.length;
-							if (res_data.candidates[0].groundingMetadata.groundingChunks.length > 3) {
+							if (checkMaxLength > 3) {
 								checkMaxLength = 3;
+							}
+							if (responseText.length+groundingMetadata.length > 2600) {
+								groundingMetadata += '参考リンクは省略'
+							} else if (responseText.length+groundingMetadata.length > 2400 && checkMaxLength == 3) {
+								checkMaxLength = 1;
+							} else if (responseText.length+groundingMetadata.length > 2000 && checkMaxLength == 3) {
+								checkMaxLength = 2;
 							}
 							for (let i = 0; i < checkMaxLength; i++) {
 								if (res_data.candidates[0].groundingMetadata.groundingChunks[i].hasOwnProperty('web')) {
@@ -291,7 +320,7 @@ export default class extends Module {
 							}
 						}
 					}
-					responseText += groundingMetadata;
+					responseText += '\n' + groundingMetadata;
 				}
 			}
 		} catch (err: unknown) {
@@ -602,10 +631,10 @@ export default class extends Module {
 
 		// Gemini API用にAPIのURLと置き換え用タイプを変更
 		if (msg.includes([KIGO + GEMINI_FLASH])) {
-			exist.api = GEMINI_20_FLASH_API;
+			exist.api = GEMINI_25_FLASH_API;
 			reKigoType = RegExp(KIGO + GEMINI_FLASH, 'i');
 		} else if (msg.includes([KIGO + GEMINI_PRO])) {
-			exist.api = GEMINI_15_PRO_API;
+			exist.api = GEMINI_25_PRO_API;
 			reKigoType = RegExp(KIGO + GEMINI_PRO, 'i');
 		}
 
@@ -644,7 +673,7 @@ export default class extends Module {
 				aiChat = {
 					question: question,
 					prompt: prompt,
-					api: GEMINI_20_FLASH_API,
+					api: GEMINI_25_FLASH_API,
 					key: config.geminiProApiKey,
 					history: exist.history,
 					friendName: friendName,
@@ -687,40 +716,84 @@ export default class extends Module {
 			msg.reply(serifs.aichat.error(exist.type));
 			return false;
 		}
+		// 後処理(AIが苦手そうなところをサポート)
+		const processedText: string = this.postProcess(text);
 
 		this.log('Replying...');
-		msg.reply(serifs.aichat.post(text, exist.type)).then(reply => {
-			// 履歴に登録
-			if (!exist.history) {
-				exist.history = [];
+		let replyId:string = '';
+		// フォロワー限定投稿の場合もDMで返信しておく
+		if (msg.visibility == "followers") {
+			const postData = {
+				replyId: msg.id,
+				text: serifs.aichat.post(processedText, exist.type),
+			};
+			const reply: Message|undefined = await this.ai.sendMessage(msg.userId, postData);
+			if (reply?.id) {
+				replyId = reply.id
 			}
-			exist.history.push({ role: 'user', content: question });
-			exist.history.push({ role: 'model', content: text });
-			// 履歴が10件を超えた場合、古いものを削除
-			if (exist.history.length > 10) {
-				exist.history.shift();
+		} else {
+			const reply: Message|undefined = await msg.reply(serifs.aichat.post(processedText, exist.type));
+			if (reply?.id) {
+				replyId = reply.id
 			}
-			this.aichatHist.insertOne({
-				postId: reply.id,
-				createdAt: Date.now(),
-				type: exist.type,
-				api: aiChat.api,
-				history: exist.history,
-				grounding: exist.grounding,
-				fromMention: exist.fromMention,
-			});
+		}
+		this.log('replyId:' + replyId);
 
-			this.log('Subscribe&Set Timer...');
+		// 履歴に登録
+		if (!exist.history) {
+			exist.history = [];
+		}
+		exist.history.push({ role: 'user', content: question });
+		exist.history.push({ role: 'model', content: processedText });
+		// 履歴が10件を超えた場合、古いものを削除
+		if (exist.history.length > 10) {
+			exist.history.shift();
+		}
+		this.aichatHist.insertOne({
+			postId: replyId,
+			createdAt: Date.now(),
+			type: exist.type,
+			api: aiChat.api,
+			history: exist.history,
+			grounding: exist.grounding,
+			fromMention: exist.fromMention,
+		});
 
-			// メンションをsubscribe
-			this.subscribeReply(reply.id, reply.id);
+		this.log('Subscribe&Set Timer...');
 
-			// タイマーセット
-			this.setTimeoutWithPersistence(TIMEOUT_TIME, {
-				id: reply.id
-			});
+		// メンションをsubscribe
+		this.subscribeReply(replyId, replyId);
+
+		// タイマーセット
+		this.setTimeoutWithPersistence(TIMEOUT_TIME, {
+			id: replyId
 		});
 		return true;
+	}
+
+	@bindThis
+	private postProcess(message: string) {
+		// Misskeyで破壊されがちなMarkdownのリスト記法について対処
+		message = message.replaceAll(/^(\s*)\* */g, '$1・');
+
+		// 絵文字部分について対処
+		const matchesEmoji = [...message.matchAll(/:(.*?):/g)];
+		matchesEmoji.forEach(match => {
+			// :で囲われた中の\はたぶんおかしいので変換
+			const fixed = match[1].replaceAll(/\\/g,'');
+			message.replace(match[1], fixed);
+		});
+		// MFMについて対処
+		message = message
+			.replaceAll(/\]\$/g, ']')// よくわからないが
+			.replaceAll(/\}\[font/g, '$[font')// fontの開始ミスを訂正
+			.replaceAll(/ font\]/g, ' ')// fontの使い方の勘違いを訂正
+			.replaceAll(/\$\[fg\.color=\w{3,} \]/g, '')// 何も文字がないものは削除
+			.replaceAll(/\$$/g, '')// 末尾の$マークはなにかのミスと思われるため削除
+			.replaceAll(/\}\$ /g, ']')// "}$ "も]のミスだと思われる...
+			.replaceAll(/>\[(\w{2}).color/g, '$[$1.color')// colorの指定ミスを訂正
+			.replaceAll(/XXXXXXXXXXXX/g, '')
+		return message;
 	}
 
 	@bindThis
