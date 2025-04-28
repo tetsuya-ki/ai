@@ -49,6 +49,14 @@ type GeminiOptions = {
 	tools?: [{}]
 };
 
+type CallGeminiOptions  = {
+	url: string,
+	searchParams: {
+		key: string,
+	},
+	json: GeminiOptions,
+};
+
 type AiChatHist = {
 	postId: string;
 	createdAt: number;
@@ -86,9 +94,10 @@ const GEMINI_FLASH = 'gemini-flash';
 const TYPE_PLAMO = 'plamo';
 const GROUNDING_TARGET = 'ggg';
 
-const GEMINI_20_FLASH_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent';
-// const GEMINI_15_FLASH_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
-const GEMINI_15_PRO_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent';
+const GEMINI_25_FLASH_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:generateContent';
+const GEMINI_20_FLASH_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
+const GEMINI_25_PRO_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro-exp-03-25:generateContent';
+//const GEMINI_15_PRO_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent';
 const PLAMO_API = 'https://platform.preferredai.jp/api/completion/v1/chat/completions';
 
 const RANDOMTALK_DEFAULT_PROBABILITY = 0.02;// デフォルトのrandomTalk確率
@@ -236,7 +245,7 @@ export default class extends Module {
 		if (aiChat.grounding) {
 			geminiOptions.tools = [{google_search:{}}];
 		}
-		let options = {
+		let options: CallGeminiOptions = {
 			url: aiChat.api,
 			searchParams: {
 				key: aiChat.key,
@@ -245,9 +254,20 @@ export default class extends Module {
 		};
 
 		this.log(JSON.stringify(options));
-		let res_data:any = null;
+		let responseText:string = await this.genTextByGeminiCore(options);
+		// 結果が空文字だった場合、Gemini 2.0 Flashで再実行
+		if (responseText === '') {
+			options.url = GEMINI_20_FLASH_API;
+			responseText = await this.genTextByGeminiCore(options);
+		}
+		return responseText;
+	}
+
+	@bindThis
+	private async genTextByGeminiCore(options: CallGeminiOptions) {
 		let responseText:string = '';
 		try {
+			let res_data:any = null;
 			res_data = await got.post(options,
 				{parseJson: (res: string) => JSON.parse(res)}).json();
 			this.log(JSON.stringify(res_data));
@@ -602,10 +622,10 @@ export default class extends Module {
 
 		// Gemini API用にAPIのURLと置き換え用タイプを変更
 		if (msg.includes([KIGO + GEMINI_FLASH])) {
-			exist.api = GEMINI_20_FLASH_API;
+			exist.api = GEMINI_25_FLASH_API;
 			reKigoType = RegExp(KIGO + GEMINI_FLASH, 'i');
 		} else if (msg.includes([KIGO + GEMINI_PRO])) {
-			exist.api = GEMINI_15_PRO_API;
+			exist.api = GEMINI_25_PRO_API;
 			reKigoType = RegExp(KIGO + GEMINI_PRO, 'i');
 		}
 
@@ -644,7 +664,7 @@ export default class extends Module {
 				aiChat = {
 					question: question,
 					prompt: prompt,
-					api: GEMINI_20_FLASH_API,
+					api: GEMINI_25_FLASH_API,
 					key: config.geminiProApiKey,
 					history: exist.history,
 					friendName: friendName,
