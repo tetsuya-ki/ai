@@ -30,7 +30,7 @@ type GeminiParts = {
 		data: string;
 	};
 	fileData?: {
-		mimeType: string;
+		mimeType?: string;
 		fileUri: string;
 	};
 	text?: string;
@@ -93,6 +93,7 @@ const GEMINI_PRO = 'gemini-pro';
 const GEMINI_FLASH = 'gemini-flash';
 const TYPE_PLAMO = 'plamo';
 const GROUNDING_TARGET = 'ggg';
+const YOUTUBE_SITE_URL = 'https://www.youtube.com/';
 
 const GEMINI_25_FLASH_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:generateContent';
 const GEMINI_20_FLASH_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
@@ -154,7 +155,7 @@ export default class extends Module {
 			minute: '2-digit'
 		});
 		// 設定のプロンプトに加え、Misskeyの注意事項やMFM記法について説明
-		let systemInstructionText = aiChat.prompt + 'ただし、リスト記法はMisskeyが対応しておらず、パーサーが壊れるため使用禁止です。列挙する場合は「・」を使ってください。さらにMisskeyではMFM記法を使うため、次のルールを守ってください。引用は行頭に>、フォント変更は$[font.serif テキスト](明朝体風)、$[font.monospace テキスト](等幅フォント)、$[font.cursive テキスト](英数字のみ筆記体)、$[font.fantasy テキスト](英数字のみファンタジー体)が使えます。文字色変更は$[fg.color=f00 テキスト]、背景色変更は$[bg.color=0f0 テキスト]、文字拡大は$[x2 テキスト]、コード表現はバッククオートで囲って`コード`とします。$[...]形式はコマンド、スペース、本文の順に必ず書き、コード表現以外のMFM記法は自由に組み合わせ可能です。背景色(bg.color)は明るい色を選び、文字色(fg.color)は人間が読みやすい中間色（暗すぎず明るすぎない色）を選んでください。'
+		let systemInstructionText = aiChat.prompt + 'ただし、リスト記法はMisskeyが対応しておらず、パーサーが壊れるため使用禁止です。列挙する場合は「・」を使ってください。さらにMisskeyではMFM記法を使うため、次のルールを守ってください。引用は行頭に>、フォント変更は$[font.serif テキスト](明朝体風)、$[font.monospace テキスト](等幅フォント)、$[font.cursive テキスト](英数字のみ筆記体)、$[font.fantasy テキスト](英数字のみファンタジー体)が使えます。文字色変更は$[fg.color=f00 テキスト]、背景色変更は$[bg.color=0f0 テキスト]、文字拡大は$[x2 テキスト]、コード表現はバッククオートで囲って`コード`とします。$[...]形式はコマンド、スペース、本文の順に必ず書き、コード表現以外のMFM記法は自由に組み合わせ可能です。背景色(bg.color)はできるだけ使わず、使う場合は明るい色を選び、文字色(fg.color)は人間が読みやすい中間色（暗すぎず明るすぎない色）を選んでください。装飾は使うべきところにだけ使ってください（識別のためなど）。'
 		// LLMは現在時刻を把握していないため、時刻情報を渡す
 		systemInstructionText +='また、現在日時は' + now + 'であり、これは回答の参考にし、時刻を聞かれるまで時刻情報は提供しないこと(なお、他の日時は無効とすること)。';
 		// 名前を伝えておく
@@ -170,12 +171,19 @@ export default class extends Module {
 			systemInstructionText += '返答のルール2:Google search with grounding.';
 		}
 		// URLから情報を取得
+		let youtubeUrl:string = '';
 		if (aiChat.question !== undefined) {
 			const urlexp = RegExp('(https?://[a-zA-Z0-9!?/+_~=:;.,*&@#$%\'-]+)', 'g');
 			const urlarray = [...aiChat.question.matchAll(urlexp)];
 			if (urlarray.length > 0) {
 				for (const url of urlarray) {
-					this.log('URL:' + url[0]);
+					// YouTubeのURLが含まれている場合は取り出す(先頭のURLが優先)
+					if (new RegExp(YOUTUBE_SITE_URL).test(url[0]) && youtubeUrl.length == 0) {
+						this.log('YouTube URL Detected!:' + url[0]);
+						youtubeUrl = url[0];
+					} else {
+						this.log('URL:' + url[0]);
+					}
 					let result: unknown = null;
 					try{
 						result = await urlToJson(url[0]);
@@ -225,6 +233,20 @@ export default class extends Module {
 					}
 				);
 			}
+		}
+		// YouTube動画のURLを指定。2025年4月29日時点の転載。最新情報は <https://ai.google.dev/gemini-api/docs/video-understanding?hl=ja>
+		// ** プレビュー: YouTube URL 機能はプレビュー版で、無料でご利用いただけます。料金とレート制限は変更される可能性があります。 **
+		// * 1 日にアップロードできる YouTube 動画は 8 時間までです。
+    // * リクエストごとにアップロードできる動画は 1 本のみです。
+		// * アップロードできるのは公開動画のみです（非公開動画や限定公開動画はアップロードできません）。
+		if (youtubeUrl.length > 0) {
+			parts.push(
+				{
+					fileData: {
+						fileUri: youtubeUrl,
+					},
+				}
+			);
 		}
 
 		// 履歴を追加
@@ -281,14 +303,22 @@ export default class extends Module {
 							if (res_data.candidates[0].content.parts.length > 0) {
 								for (let i = 0; i < res_data.candidates[0].content.parts.length; i++) {
 									if (res_data.candidates[0].content.parts[i].hasOwnProperty('text')) {
-										responseText += res_data.candidates[0].content.parts[i].text;
+										// 先頭から末尾が数字と英字で表現できる内容の場合は無視する(LLMのレスポンスがおかしいため)
+										if (!/^[0-9a-zA-Z]+$/.test(res_data.candidates[0].content.parts[i].text)) {
+											if (i > 0) {
+												responseText += '\n...\n\n';
+											}
+											responseText += res_data.candidates[0].content.parts[i].text;
+										} else {
+											continue;
+										}
 										if (/\n参考\(1\)/.test(responseText)) {
 											responseText = responseText.split('\n参考(1)')[0];
 											this.log('**LLMが気を利かせてよくわからない参考をつけているので削除**\n' + responseText.replaceAll(/\n/g, '<br>'));
 										}
 										// 長すぎるパターンはここで短くしておく
 										if (responseText.length > 2000) {
-											responseText.slice(0, 2000) + '(...省略されました...)';
+											responseText = responseText.slice(0, 2000) + '(...省略されました...)';
 											this.log('長すぎたため、途中から省略:' + responseText.replaceAll(/\n/g, '<br>'));
 										}
 									}
@@ -517,20 +547,20 @@ export default class extends Module {
 			this.log('conversationData is not found.');
 			return false;
 		}
-
-		// 見つかった場合はunsubscribe&removeし、回答。今回のでsubscribe,insert,timeout設定
-		this.log('unsubscribeReply & remove.');
 		this.log(exist.type + ':' + exist.postId);
-		if (exist.history) {
-			for (const his of exist.history) {
-				this.log(his.role + ':' + his.content);
-			}
-		}
-		this.unsubscribeReply(key);
-		this.aichatHist.remove(exist);
+		// if (exist.history) {
+		// 	for (const his of exist.history) {
+		// 		this.log(his.role + ':' + his.content);
+		// 	}
+		// }
 
 		// AIに問い合わせ
 		const result = await this.handleAiChat(exist, msg);
+
+		// 問い合わせ結果が適切な場合、unsubscribe&removeし、回答。今回のでsubscribe,insert,timeout設定
+		this.log('unsubscribeReply & remove.');
+		this.unsubscribeReply(key);
+		this.aichatHist.remove(exist);
 
 		if (result) {
 			return {
@@ -801,6 +831,7 @@ export default class extends Module {
 		message = message
 			.replaceAll(/\]\$/g, ']')// よくわからないが
 			.replaceAll(/\}\[font/g, '$[font')// fontの開始ミスを訂正
+			.replaceAll(/([^$])\[font/g, '$1$[font')// fontの開始ミスを訂正
 			.replaceAll(/ font\]/g, ' ')// fontの使い方の勘違いを訂正
 			.replaceAll(/\$\[fg\.color=\w{3,} \]/g, '')// 何も文字がないものは削除
 			.replaceAll(/\$$/g, '')// 末尾の$マークはなにかのミスと思われるため削除
@@ -810,6 +841,7 @@ export default class extends Module {
 			.replaceAll(/\$\./g, '')// $.はたぶんミス
 			.replaceAll(/\$\]/g, ']')// "$]"を訂正
 			.replaceAll(/\\text\{(.+?)\}/ig, '$1')// 謎の\text{xxx}構文を削除
+			.replaceAll(/。,+/ig, '。')// 。のあとの,連続について補正
 			.replaceAll(/XXXXXXXXXXXX/g, '')
 		return message;
 	}
