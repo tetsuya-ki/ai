@@ -30,7 +30,7 @@ type GeminiParts = {
 		data: string;
 	};
 	fileData?: {
-		mimeType: string;
+		mimeType?: string;
 		fileUri: string;
 	};
 	text?: string;
@@ -93,6 +93,7 @@ const GEMINI_PRO = 'gemini-pro';
 const GEMINI_FLASH = 'gemini-flash';
 const TYPE_PLAMO = 'plamo';
 const GROUNDING_TARGET = 'ggg';
+const YOUTUBE_SITE_URL = 'https://www.youtube.com/';
 
 const GEMINI_25_FLASH_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:generateContent';
 const GEMINI_20_FLASH_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
@@ -170,12 +171,19 @@ export default class extends Module {
 			systemInstructionText += '返答のルール2:Google search with grounding.';
 		}
 		// URLから情報を取得
+		let youtubeUrl:string = '';
 		if (aiChat.question !== undefined) {
 			const urlexp = RegExp('(https?://[a-zA-Z0-9!?/+_~=:;.,*&@#$%\'-]+)', 'g');
 			const urlarray = [...aiChat.question.matchAll(urlexp)];
 			if (urlarray.length > 0) {
 				for (const url of urlarray) {
-					this.log('URL:' + url[0]);
+					// YouTubeのURLが含まれている場合は取り出す(先頭のURLが優先)
+					if (new RegExp(YOUTUBE_SITE_URL).test(url[0]) && youtubeUrl.length == 0) {
+						this.log('YouTube URL Detected!:' + url[0]);
+						youtubeUrl = url[0];
+					} else {
+						this.log('URL:' + url[0]);
+					}
 					let result: unknown = null;
 					try{
 						result = await urlToJson(url[0]);
@@ -225,6 +233,20 @@ export default class extends Module {
 					}
 				);
 			}
+		}
+		// YouTube動画のURLを指定。2025年4月29日時点の転載。最新情報は <https://ai.google.dev/gemini-api/docs/video-understanding?hl=ja>
+		// ** プレビュー: YouTube URL 機能はプレビュー版で、無料でご利用いただけます。料金とレート制限は変更される可能性があります。 **
+		// * 1 日にアップロードできる YouTube 動画は 8 時間までです。
+    // * リクエストごとにアップロードできる動画は 1 本のみです。
+		// * アップロードできるのは公開動画のみです（非公開動画や限定公開動画はアップロードできません）。
+		if (youtubeUrl.length > 0) {
+			parts.push(
+				{
+					fileData: {
+						fileUri: youtubeUrl,
+					},
+				}
+			);
 		}
 
 		// 履歴を追加
