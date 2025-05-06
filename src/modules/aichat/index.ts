@@ -189,7 +189,7 @@ export default class extends Module {
 						result = await urlToJson(url[0]);
 					} catch (err: unknown) {
 						systemInstructionText += '補足として提供されたURLは無効でした:URL=>' + url[0]
-						this.log('Skip url becase error in urlToJson');
+						this.log('Skip url because error in urlToJson');
 						continue;
 					}
 					const urlpreview: UrlPreview = result as UrlPreview;
@@ -281,6 +281,7 @@ export default class extends Module {
 		let responseText:string = await this.genTextByGeminiCore(options);
 		// 結果が空文字だった場合、Gemini 2.0 Flashで再実行
 		if (responseText === '') {
+			this.log('一度エラーになったので、GEMINI_20_FLASH_APIで再実行');
 			options.url = GEMINI_20_FLASH_API;
 			responseText = await this.genTextByGeminiCore(options);
 		}
@@ -302,6 +303,12 @@ export default class extends Module {
 						if (res_data.candidates[0].content.hasOwnProperty('parts')) {
 							if (res_data.candidates[0].content.parts.length > 0) {
 								for (let i = 0; i < res_data.candidates[0].content.parts.length; i++) {
+									// 思考過程を出力したやつの場合、無視する
+									if (res_data.candidates[0].content.parts[i].hasOwnProperty('thought')) {
+											if (res_data.candidates[0].content.parts[i].thought === 'true') {
+												continue;
+										}
+									}
 									if (res_data.candidates[0].content.parts[i].hasOwnProperty('text')) {
 										// 先頭から末尾が数字と英字で表現できる内容の場合は無視する(LLMのレスポンスがおかしいため)
 										if (!/^[0-9a-zA-Z]+$/.test(res_data.candidates[0].content.parts[i].text)) {
@@ -832,6 +839,7 @@ export default class extends Module {
 			.replaceAll(/\]\$/g, ']')// よくわからないが
 			.replaceAll(/\}\[font/g, '$[font')// fontの開始ミスを訂正
 			.replaceAll(/([^$])\[font/g, '$1$[font')// fontの開始ミスを訂正
+			.replaceAll(/\$\[\$font/g, '$[font')// fontの開始ミスを訂正2
 			.replaceAll(/ font\]/g, ' ')// fontの使い方の勘違いを訂正
 			.replaceAll(/\$\[fg\.color=\w{3,} \]/g, '')// 何も文字がないものは削除
 			.replaceAll(/\$$/g, '')// 末尾の$マークはなにかのミスと思われるため削除
@@ -842,7 +850,7 @@ export default class extends Module {
 			.replaceAll(/\$\]/g, ']')// "$]"を訂正
 			.replaceAll(/\\text\{(.+?)\}/ig, '$1')// 謎の\text{xxx}構文を削除
 			.replaceAll(/。,+/ig, '。')// 。のあとの,連続について補正
-			.replaceAll(/XXXXXXXXXXXX/g, '')
+			.replaceAll(/XXXXXXXXXXXX/g, '');
 		return message;
 	}
 
