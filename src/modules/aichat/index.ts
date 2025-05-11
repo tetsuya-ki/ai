@@ -94,6 +94,7 @@ const GEMINI_FLASH = 'gemini-flash';
 const TYPE_PLAMO = 'plamo';
 const GROUNDING_TARGET = 'ggg';
 const YOUTUBE_SITE_URL = 'https://www.youtube.com/';
+const YOUTUBE_SHORT_URL = 'https://youtu.be/';
 
 const GEMINI_25_FLASH_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:generateContent';
 const GEMINI_20_FLASH_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
@@ -177,18 +178,23 @@ export default class extends Module {
 			const urlarray = [...aiChat.question.matchAll(urlexp)];
 			if (urlarray.length > 0) {
 				for (const url of urlarray) {
+					let targetUrl = url[0];
+					// YouTubeの短いURLの場合、変換し格納
+					if (new RegExp(YOUTUBE_SHORT_URL).test(targetUrl)) {
+						targetUrl = YOUTUBE_SITE_URL + 'watch?v=' + url[0].split(YOUTUBE_SHORT_URL)[1];
+					}
 					// YouTubeのURLが含まれている場合は取り出す(先頭のURLが優先)
-					if (new RegExp(YOUTUBE_SITE_URL).test(url[0]) && youtubeUrl.length == 0) {
-						this.log('YouTube URL Detected!:' + url[0]);
-						youtubeUrl = url[0];
+					if (new RegExp(YOUTUBE_SITE_URL).test(targetUrl) && youtubeUrl.length == 0) {
+						this.log('YouTube URL Detected!:' + targetUrl);
+						youtubeUrl = targetUrl;
 					} else {
-						this.log('URL:' + url[0]);
+						this.log('URL:' + targetUrl);
 					}
 					let result: unknown = null;
 					try{
-						result = await urlToJson(url[0]);
+						result = await urlToJson(targetUrl);
 					} catch (err: unknown) {
-						systemInstructionText += '補足として提供されたURLは無効でした:URL=>' + url[0]
+						systemInstructionText += '補足として提供されたURLは無効でした:URL=>' + targetUrl;
 						this.log('Skip url because error in urlToJson');
 						continue;
 					}
@@ -850,6 +856,7 @@ export default class extends Module {
 			.replaceAll(/\$\]/g, ']')// "$]"を訂正
 			.replaceAll(/\\text\{(.+?)\}/ig, '$1')// 謎の\text{xxx}構文を削除
 			.replaceAll(/。,+/ig, '。')// 。のあとの,連続について補正
+			.replaceAll(/\$\[fg\.color=#([a-f0-9]{3} .+?)\]/g, '$[fg.color=$1 ]')// fg.colorで#がついちゃうやつ
 			.replaceAll(/XXXXXXXXXXXX/g, '');
 		return message;
 	}
