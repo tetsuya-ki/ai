@@ -296,9 +296,9 @@ export default class extends Module {
 
 	@bindThis
 	private async genTextByGeminiCore(options: CallGeminiOptions) {
-		let responseText:string = '';
+		let responseText: string = '';
 		try {
-			let res_data:any = null;
+			let res_data: any = null;
 			res_data = await got.post({
 				url: options.url,
 				searchParams: options.searchParams,
@@ -306,83 +306,63 @@ export default class extends Module {
 				parseJson: (res: string) => JSON.parse(res)
 			}).json();
 			this.log(JSON.stringify(res_data));
-			if (res_data.hasOwnProperty('candidates')) {
-				if (res_data.candidates?.length > 0) {
-					// 結果を取得
-					if (res_data.candidates[0].hasOwnProperty('content')) {
-						if (res_data.candidates[0].content.hasOwnProperty('parts')) {
-							if (res_data.candidates[0].content.parts.length > 0) {
-								for (let i = 0; i < res_data.candidates[0].content.parts.length; i++) {
-									// 思考過程を出力したやつの場合、無視する
-									if (res_data.candidates[0].content.parts[i].hasOwnProperty('thought')) {
-											if (res_data.candidates[0].content.parts[i].thought === 'true') {
-												continue;
-										}
-									}
-									if (res_data.candidates[0].content.parts[i].hasOwnProperty('text')) {
-										// 先頭から末尾が数字と英字で表現できる内容の場合は無視する(LLMのレスポンスがおかしいため)
-										if (!/^[0-9a-zA-Z]+$/.test(res_data.candidates[0].content.parts[i].text)) {
-											if (i > 0) {
-												responseText += '\n...\n\n';
-											}
-											responseText += res_data.candidates[0].content.parts[i].text;
-										} else {
-											continue;
-										}
-										if (/\n参考\(1\)/.test(responseText)) {
-											responseText = responseText.split('\n参考(1)')[0];
-											this.log('**LLMが気を利かせてよくわからない参考をつけているので削除**\n' + responseText.replaceAll(/\n/g, '<br>'));
-										}
-										// 長すぎるパターンはここで短くしておく
-										if (responseText.length > 2000) {
-											responseText = responseText.slice(0, 2000) + '(...省略されました...)';
-											this.log('長すぎたため、途中から省略:' + responseText.replaceAll(/\n/g, '<br>'));
-										}
-									}
-								}
-							}
-						}
+			const parts = res_data?.candidates?.[0]?.content?.parts;
+			if (Array.isArray(parts) && parts.length > 0) {
+				for (let i = 0; i < parts.length; i++) {
+					// 思考過程を出力したやつの場合、無視
+					if (parts[i]?.thought === 'true') continue;
+					const text = parts[i]?.text;
+					// 先頭から末尾が数字と英字で表現できる内容の場合は無視する(LLMのレスポンスがおかしいため)
+					if (typeof text === 'string' && !/^[0-9a-zA-Z]+$/.test(text)) {
+						if (i > 0) responseText += '\n...\n\n';
+						responseText += text;
 					}
-					// groundingMetadataを取得
-					let groundingMetadata = '';
-					if (res_data.candidates[0].hasOwnProperty('groundingMetadata')) {
-						// 参考サイト情報
-						if (res_data.candidates[0].groundingMetadata.hasOwnProperty('groundingChunks')) {
-							// 参考サイトが多すぎる場合があるので、3つに制限
-							let checkMaxLength = res_data.candidates[0].groundingMetadata.groundingChunks.length;
-							if (checkMaxLength > 3) {
-								checkMaxLength = 3;
-							}
-							if (responseText.length+groundingMetadata.length > 2600) {
-								groundingMetadata += '参考リンクは省略'
-							} else if (responseText.length+groundingMetadata.length > 2400 && checkMaxLength == 3) {
-								checkMaxLength = 1;
-							} else if (responseText.length+groundingMetadata.length > 2000 && checkMaxLength == 3) {
-								checkMaxLength = 2;
-							}
-							for (let i = 0; i < checkMaxLength; i++) {
-								if (res_data.candidates[0].groundingMetadata.groundingChunks[i].hasOwnProperty('web')) {
-									if (res_data.candidates[0].groundingMetadata.groundingChunks[i].web.hasOwnProperty('uri')
-											&& res_data.candidates[0].groundingMetadata.groundingChunks[i].web.hasOwnProperty('title')) {
-										// 300文字を超えないリンクの場合のみ載せる
-										if (res_data.candidates[0].groundingMetadata.groundingChunks[i].web.uri.length < 300) {
-											groundingMetadata += `参考(${i+1}): [${res_data.candidates[0].groundingMetadata.groundingChunks[i].web.title}](${res_data.candidates[0].groundingMetadata.groundingChunks[i].web.uri})\n`;
-										} else {
-											groundingMetadata += `参考(${i+1}): ${res_data.candidates[0].groundingMetadata.groundingChunks[i].web.title}(リンクなし)\n`;
-										}
-									}
-								}
-							}
-						}
-						// 検索ワード
-						if (res_data.candidates[0].groundingMetadata.hasOwnProperty('webSearchQueries')) {
-							if (res_data.candidates[0].groundingMetadata.webSearchQueries.length > 0) {
-								groundingMetadata += '検索ワード: ' + res_data.candidates[0].groundingMetadata.webSearchQueries.join(',') + '\n';
-							}
-						}
+					// LLMが気を利かせてよくわからない参考をつけている場合は削除
+					if (/\n参考\(1\)/.test(responseText)) {
+						responseText = responseText.split('\n参考(1)')[0];
+						this.log('**LLMが気を利かせてよくわからない参考をつけているので削除**\n' + responseText.replaceAll(/\n/g, '<br>'));
 					}
-					responseText += '\n' + groundingMetadata;
+					// 長すぎるパターンはここで短くしておく
+					if (responseText.length > 2000) {
+						responseText = responseText.slice(0, 2000) + '(...省略されました...)';
+						this.log('長すぎたため、途中から省略:' + responseText.replaceAll(/\n/g, '<br>'));
+					}
 				}
+			}
+			// groundingMetadataを取得
+			let groundingMetadata = '';
+			// 参考サイト情報について処理
+			const groundingChunks = res_data?.candidates?.[0]?.groundingMetadata?.groundingChunks;
+			if (Array.isArray(groundingChunks)) {
+				let checkMaxLength = groundingChunks.length;
+				// 参考サイトが多すぎる場合があるので、3つに制限
+				if (checkMaxLength > 3) checkMaxLength = 3;
+				if (responseText.length + groundingMetadata.length > 2600) {
+					groundingMetadata += '参考リンクは省略';
+				} else if (responseText.length + groundingMetadata.length > 2400 && checkMaxLength == 3) {
+					checkMaxLength = 1;
+				} else if (responseText.length + groundingMetadata.length > 2000 && checkMaxLength == 3) {
+					checkMaxLength = 2;
+				}
+				for (let i = 0; i < checkMaxLength; i++) {
+					const web = groundingChunks[i]?.web;
+					if (web?.uri && web?.title) {
+						// 300文字を超えないリンクの場合のみ載せる
+						if (web.uri.length < 300) {
+							groundingMetadata += `参考(${i + 1}): [${web.title}](${web.uri})\n`;
+						} else {
+							groundingMetadata += `参考(${i + 1}): ${web.title}(リンクなし)\n`;
+						}
+					}
+				}
+			}
+			// 検索ワードについて処理
+			const webSearchQueries = res_data?.candidates?.[0]?.groundingMetadata?.webSearchQueries;
+			if (Array.isArray(webSearchQueries) && webSearchQueries.length > 0) {
+				groundingMetadata += '検索ワード: ' + webSearchQueries.join(',') + '\n';
+			}
+			if (groundingMetadata) {
+				responseText += '\n' + groundingMetadata;
 			}
 		} catch (err: unknown) {
 			this.log('Error By Call Gemini');
@@ -405,13 +385,13 @@ export default class extends Module {
 			json: {
 				model: 'plamo-beta',
 				messages: [
-					{role: 'system', content: aiChat.prompt},
-					{role: 'user', content: aiChat.question},
+					{ role: 'system', content: aiChat.prompt },
+					{ role: 'user', content: aiChat.question },
 				],
 			},
 		};
 		this.log(JSON.stringify(options));
-		let res_data:any = null;
+		let res_data: any = null;
 		try {
 			res_data = await got.post({
 				url: options.url,
@@ -420,15 +400,7 @@ export default class extends Module {
 				parseJson: (res: string) => JSON.parse(res)
 			}).json();
 			this.log(JSON.stringify(res_data));
-			if (res_data.hasOwnProperty('choices')) {
-				if (res_data.choices.length > 0) {
-					if (res_data.choices[0].hasOwnProperty('message')) {
-						if (res_data.choices[0].message.hasOwnProperty('content')) {
-							return res_data.choices[0].message.content;
-						}
-					}
-				}
-			}
+			return res_data?.choices?.[0]?.message?.content ?? null;
 		} catch (err: unknown) {
 			this.log('Error By Call PLaMo');
 			if (err instanceof Error) {
@@ -441,30 +413,21 @@ export default class extends Module {
 	@bindThis
 	private async note2base64File(notesId: string) {
 		const noteData = await this.ai.api('notes/show', { noteId: notesId }) as { files?: any[] };
-		let files:base64File[] = [];
-		let fileType: string | undefined, filelUrl: string | undefined;
-		if (noteData && Array.isArray(noteData.files)) {
+		let files: base64File[] = [];
+		if (noteData?.files && Array.isArray(noteData.files)) {
 			for (let i = 0; i < noteData.files.length; i++) {
-				if (noteData.files[i].hasOwnProperty('type')) {
-					fileType = noteData.files[i].type;
-					if (noteData.files[i].hasOwnProperty('name')) {
-						// 拡張子で挙動を変えようと思ったが、text/plainしかMisskeyで変になってGemini対応してるものがない？
-						// let extention = noteData.files[i].name.split('.').pop();
-						if (fileType === 'application/octet-stream' || fileType === 'application/xml') {
-							fileType = 'text/plain';
-						}
+				let fileType = noteData.files[i]?.type;
+				if (noteData.files[i]?.name) {
+					if (fileType === 'application/octet-stream' || fileType === 'application/xml') {
+						fileType = 'text/plain';
 					}
 				}
-				if (noteData.files[i].hasOwnProperty('thumbnailUrl') && noteData.files[i].thumbnailUrl) {
-					filelUrl = noteData.files[i].thumbnailUrl;
-				} else if (noteData.files[i].hasOwnProperty('url') && noteData.files[i].url) {
-					filelUrl = noteData.files[i].url;
-				}
-				if (fileType !== undefined && filelUrl !== undefined) {
+				let filelUrl = noteData.files[i]?.thumbnailUrl || noteData.files[i]?.url;
+				if (fileType && filelUrl) {
 					try {
-						this.log('filelUrl:'+filelUrl);
+						this.log('filelUrl:' + filelUrl);
 						const file = await urlToBase64(filelUrl);
-						const base64file:base64File = {type: fileType, base64: file};
+						const base64file: base64File = { type: fileType, base64: file };
 						files.push(base64file);
 					} catch (err: unknown) {
 						if (err instanceof Error) {
