@@ -108,7 +108,7 @@ const RANDOMTALK_DEFAULT_INTERVAL = 1000 * 60 * 60 * 12;// デフォルトのran
 
 export default class extends Module {
 	public readonly name = 'aichat';
-	private aichatHist: loki.Collection<AiChatHist>;
+	private aichatHist: loki.Collection<AiChatHist>|undefined;
 	private randomTalkProbability: number = RANDOMTALK_DEFAULT_PROBABILITY;
 	private randomTalkIntervalMinutes: number = RANDOMTALK_DEFAULT_INTERVAL;
 
@@ -299,8 +299,12 @@ export default class extends Module {
 		let responseText:string = '';
 		try {
 			let res_data:any = null;
-			res_data = await got.post(options,
-				{parseJson: (res: string) => JSON.parse(res)}).json();
+			res_data = await got.post({
+				url: options.url,
+				searchParams: options.searchParams,
+				json: options.json,
+				parseJson: (res: string) => JSON.parse(res)
+			}).json();
 			this.log(JSON.stringify(res_data));
 			if (res_data.hasOwnProperty('candidates')) {
 				if (res_data.candidates?.length > 0) {
@@ -409,8 +413,12 @@ export default class extends Module {
 		this.log(JSON.stringify(options));
 		let res_data:any = null;
 		try {
-			res_data = await got.post(options,
-				{parseJson: (res: string) => JSON.parse(res)}).json();
+			res_data = await got.post({
+				url: options.url,
+				headers: options.headers,
+				json: options.json,
+				parseJson: (res: string) => JSON.parse(res)
+			}).json();
 			this.log(JSON.stringify(res_data));
 			if (res_data.hasOwnProperty('choices')) {
 				if (res_data.choices.length > 0) {
@@ -432,10 +440,10 @@ export default class extends Module {
 
 	@bindThis
 	private async note2base64File(notesId: string) {
-		const noteData = await this.ai.api('notes/show', { noteId: notesId });
+		const noteData = await this.ai.api('notes/show', { noteId: notesId }) as { files?: any[] };
 		let files:base64File[] = [];
 		let fileType: string | undefined, filelUrl: string | undefined;
-		if (noteData !== null && noteData.hasOwnProperty('files')) {
+		if (noteData && Array.isArray(noteData.files)) {
 			for (let i = 0; i < noteData.files.length; i++) {
 				if (noteData.files[i].hasOwnProperty('type')) {
 					fileType = noteData.files[i].type;
@@ -481,13 +489,13 @@ export default class extends Module {
 		const conversationData = await this.ai.api('notes/conversation', { noteId: msg.id });
 
 		// aichatHistに該当のポストが見つかった場合は会話中のためmentionHoonkでは対応しない
-		let exist : AiChatHist | null = null;
-		if (conversationData != undefined) {
+		let exist : AiChatHist | null | undefined;
+		if (Array.isArray(conversationData)) {
 			for (const message of conversationData) {
-				exist = this.aichatHist.findOne({
+				exist = this.aichatHist?.findOne({
 					postId: message.id
 				});
-				if (exist != null) return false;
+				if (exist) return false;
 			}
 		}
 
@@ -512,13 +520,13 @@ export default class extends Module {
 		if (msg.quoteId) {
 			const quotedNote = await this.ai.api('notes/show', {
 				noteId: msg.quoteId,
-			});
+			}) as { text?: string };
 			current.history = [
 				{
 					role: 'user',
 					content:
 						'ユーザーが与えた前情報である、引用された文章: ' +
-						quotedNote.text,
+						(quotedNote.text ?? ''),
 				},
 			];
 		}
@@ -542,21 +550,23 @@ export default class extends Module {
 		const conversationData = await this.ai.api('notes/conversation', { noteId: msg.id });
 
 		// 結果がnullやサイズ0の場合は終了
-		if (conversationData == null || conversationData.length == 0 ) {
+		if (!Array.isArray(conversationData) || conversationData.length == 0 ) {
 			this.log('conversationData is nothing.');
 			return false;
 		}
 
 		// aichatHistに該当のポストが見つからない場合は終了
-		let exist : AiChatHist | null = null;
-		for (const message of conversationData) {
-			exist = this.aichatHist.findOne({
-				postId: message.id
-			});
-			// 見つかった場合はそれを利用
-			if (exist != null) break;
+		let exist : AiChatHist | null | undefined;
+		if (Array.isArray(conversationData)) {
+			for (const message of conversationData) {
+				exist = this.aichatHist?.findOne({
+					postId: message.id
+				});
+				// 見つかった場合はそれを利用
+				if (exist) break;
+			}
 		}
-		if (exist == null) {
+		if (!exist) {
 			this.log('conversationData is not found.');
 			return false;
 		}
@@ -573,7 +583,7 @@ export default class extends Module {
 		// 問い合わせ結果が適切な場合、unsubscribe&removeし、回答。今回のでsubscribe,insert,timeout設定
 		this.log('unsubscribeReply & remove.');
 		this.unsubscribeReply(key);
-		this.aichatHist.remove(exist);
+		this.aichatHist?.remove(exist);
 
 		if (result) {
 			return {
@@ -589,6 +599,10 @@ export default class extends Module {
 		const tl = await this.ai.api('notes/local-timeline', {
 			limit: 30
 		});
+		if (!Array.isArray(tl)) {
+			this.log('local-timeline result is not an array.');
+			return false;
+		}
 		const interestedNotes = tl.filter(note =>
 			note.userId !== this.ai.account.id &&
 			note.text != null &&
@@ -606,33 +620,33 @@ export default class extends Module {
 		const choseNote = interestedNotes[Math.floor(Math.random() * interestedNotes.length)];
 
 		// aichatHistに該当のポストが見つかった場合は会話中のためaichatRandomTalkでは対応しない
-		let exist : AiChatHist | null = null;
+		let exist : AiChatHist | undefined | null;
 
 		// 選択されたノート自体が会話中のidかチェック
-		exist = this.aichatHist.findOne({
+		exist = this.aichatHist?.findOne({
 			postId: choseNote.id
 		});
-		if (exist != null) return false;
+		if (exist) return false;
 
 		// msg.idをもとにnotes/childrenを呼び出し、会話中のidかチェック
 		const childrenData = await this.ai.api('notes/children', { noteId: choseNote.id });
-		if (childrenData != undefined) {
+		if (Array.isArray(childrenData)) {
 			for (const message of childrenData) {
-				exist = this.aichatHist.findOne({
+				exist = this.aichatHist?.findOne({
 					postId: message.id
 				});
-				if (exist != null) return false;
+				if (exist) return false;
 			}
 		}
 
 		// msg.idをもとにnotes/conversationを呼び出し、会話中のidかチェック
 		const conversationData = await this.ai.api('notes/conversation', { noteId: choseNote.id });
-		if (conversationData != undefined) {
+		if (Array.isArray(conversationData)) {
 			for (const message of conversationData) {
-				exist = this.aichatHist.findOne({
+				exist = this.aichatHist?.findOne({
 					postId: message.id
 				});
-				if (exist != null) return false;
+				if (exist) return false;
 			}
 		}
 
@@ -644,7 +658,7 @@ export default class extends Module {
 			return false;
 		}
 		const friend: Friend | null = this.ai.lookupFriend(choseNote.userId);
-		if (friend == null || friend.love < 7) {
+		if (friend == null || friend.love < 2) {
 			this.log('AiChat(randomtalk) end.Because there was not enough affection.');
 			return false;
 		} else if (choseNote.user.isBot) {
@@ -806,7 +820,7 @@ export default class extends Module {
 		if (exist.history.length > 10) {
 			exist.history.shift();
 		}
-		this.aichatHist.insertOne({
+		this.aichatHist?.insertOne({
 			postId: replyId,
 			createdAt: Date.now(),
 			type: exist.type,
@@ -864,12 +878,12 @@ export default class extends Module {
 	@bindThis
 	private async timeoutCallback({id}) {
 		this.log('timeoutCallback...');
-		const exist = this.aichatHist.findOne({
+		const exist = this.aichatHist?.findOne({
 			postId: id
 		});
 		this.unsubscribeReply(id);
 		if (exist != null) {
-			this.aichatHist.remove(exist);
+			this.aichatHist?.remove(exist);
 		}
 	}
 }
