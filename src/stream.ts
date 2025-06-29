@@ -4,6 +4,9 @@ import WebSocket from 'ws';
 import _ReconnectingWebsocket from 'reconnecting-websocket';
 import config from './config.js';
 
+import chalk from 'chalk';
+import log from '@/utils/log.js';
+
 const ReconnectingWebsocket = _ReconnectingWebsocket as unknown as typeof _ReconnectingWebsocket['default'];
 
 /**
@@ -16,6 +19,7 @@ export default class Stream extends EventEmitter {
 	private sharedConnectionPools: Pool[] = [];
 	private sharedConnections: SharedConnection[] = [];
 	private nonSharedConnections: NonSharedConnection[] = [];
+	public sentTime: Date = new Date();
 
 	constructor() {
 		super();
@@ -29,6 +33,11 @@ export default class Stream extends EventEmitter {
 		this.stream.addEventListener('open', this.onOpen);
 		this.stream.addEventListener('close', this.onClose);
 		this.stream.addEventListener('message', this.onMessage);
+	}
+
+	@bindThis
+	public log(msg: string) {
+		log(`[${chalk.magenta('Stream')}]: ${msg}`);
 	}
 
 	@bindThis
@@ -132,6 +141,8 @@ export default class Stream extends EventEmitter {
 	 */
 	@bindThis
 	public send(typeOrPayload, payload?) {
+		// this.log(`send`);
+		this.sentTime = new Date();
 		const data = payload === undefined ? typeOrPayload : {
 			type: typeOrPayload,
 			body: payload
@@ -151,6 +162,7 @@ export default class Stream extends EventEmitter {
 	 */
 	@bindThis
 	public close() {
+		// this.log(`close`);
 		this.stream.removeEventListener('open', this.onOpen);
 		this.stream.removeEventListener('message', this.onMessage);
 	}
@@ -202,6 +214,7 @@ class Pool {
 
 	@bindThis
 	public connect() {
+		// log(`connect`);
 		this.isConnected = true;
 		this.stream.send('connect', {
 			channel: this.channel,
@@ -211,6 +224,7 @@ class Pool {
 
 	@bindThis
 	private disconnect() {
+		// log(`disconnect`);
 		this.isConnected = false;
 		this.disposeTimerId = null;
 		this.stream.send('disconnect', { id: this.id });

@@ -99,6 +99,7 @@ export default class 藍 {
 				} else {
 					this.log(chalk.green('The memory loaded successfully'));
 					this.run();
+					setInterval(this.reconnect, 1000 * 60 * 5);
 				}
 			}
 		});
@@ -134,6 +135,32 @@ export default class 藍 {
 		const meta = this.getMeta();
 		this.lastSleepedAt = meta.lastWakingAt;
 
+		// ストリーム関連の処理を実行
+		this.processStream();
+
+		// Install modules
+		this.modules.forEach(m => {
+			this.log(`Installing ${chalk.cyan.italic(m.name)}\tmodule...`);
+			m.init(this);
+			const res = m.install();
+			if (res != null) {
+				if (res.mentionHook) this.mentionHooks.push(res.mentionHook);
+				if (res.contextHook) this.contextHooks[m.name] = res.contextHook;
+				if (res.timeoutCallback) this.timeoutCallbacks[m.name] = res.timeoutCallback;
+			}
+		});
+
+		// タイマー監視
+		this.crawleTimer();
+		setInterval(this.crawleTimer, 1000);
+
+		setInterval(this.logWaking, 10000);
+
+		this.log(chalk.green.bold('Ai am now running!'));
+	}
+
+		@bindThis
+		private processStream() {
 		// Init stream
 		this.connection = new Stream();
 
@@ -182,26 +209,23 @@ export default class 藍 {
 			this.onNotification(data);
 		});
 		//#endregion
+	}
 
-		// Install modules
-		this.modules.forEach(m => {
-			this.log(`Installing ${chalk.cyan.italic(m.name)}\tmodule...`);
-			m.init(this);
-			const res = m.install();
-			if (res != null) {
-				if (res.mentionHook) this.mentionHooks.push(res.mentionHook);
-				if (res.contextHook) this.contextHooks[m.name] = res.contextHook;
-				if (res.timeoutCallback) this.timeoutCallbacks[m.name] = res.timeoutCallback;
-			}
-		});
+	@bindThis
+	private reconnect(){
+		// 30分前の時間を作成
+		const beforeTime = new Date();
+		beforeTime.setMinutes(beforeTime.getMinutes() - 30);
+		// sendした時間が30分前の時間よりも新しいなら問題なし
+		// 古い場合、sendしていない(=コネクションが切れている)ため再接続
+		if (this.connection.sentTime > beforeTime) {
+			this.log(chalk.green('reconnect is not need.'));
+			return
+		}
+		this.log(chalk.green.bold('reconnect is needed.'));
 
-		// タイマー監視
-		this.crawleTimer();
-		setInterval(this.crawleTimer, 1000);
-
-		setInterval(this.logWaking, 10000);
-
-		this.log(chalk.green.bold('Ai am now running!'));
+		// ストリーム関連の処理を実行
+		this.processStream();
 	}
 
 	/**
