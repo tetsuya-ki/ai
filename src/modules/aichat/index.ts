@@ -100,7 +100,7 @@ const GEMINI_25_FLASH_API = 'https://generativelanguage.googleapis.com/v1beta/mo
 const GEMINI_20_FLASH_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
 const GEMINI_25_PRO_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro-exp-03-25:generateContent';
 //const GEMINI_15_PRO_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent';
-const PLAMO_API = 'https://platform.preferredai.jp/api/completion/v1/chat/completions';
+const PLAMO_API = 'https://api.platform.preferredai.jp/v1/chat/completions';
 
 const RANDOMTALK_DEFAULT_PROBABILITY = 0.02;// デフォルトのrandomTalk確率
 const TIMEOUT_TIME = 1000 * 60 * 60 * 0.5;// aichatの返信を監視する時間
@@ -383,7 +383,7 @@ export default class extends Module {
 				Authorization: 'Bearer ' + aiChat.key
 			},
 			json: {
-				model: 'plamo-beta',
+				model: 'plamo-2.0-prime',
 				messages: [
 					{ role: 'system', content: aiChat.prompt },
 					{ role: 'user', content: aiChat.question },
