@@ -218,11 +218,13 @@ export default class 藍 {
 		beforeTime.setMinutes(beforeTime.getMinutes() - 30);
 		// sendした時間が30分前の時間よりも新しいなら問題なし
 		// 古い場合、sendしていない(=コネクションが切れている)ため再接続
-		if (this.connection.sentTime > beforeTime) {
+		if (this.connection.sentTime && beforeTime < this.connection.sentTime) {
 			this.log(chalk.green('reconnect is not need.'));
 			return
 		}
-		this.log(chalk.green.bold('reconnect is needed.'));
+		this.log(chalk.magenta.bold('reconnect is needed(and dispose connection).'));
+		const mainStream = this.connection.useSharedConnection('main');
+		mainStream.dispose();
 
 		// ストリーム関連の処理を実行
 		this.processStream();

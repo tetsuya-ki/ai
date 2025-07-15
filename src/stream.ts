@@ -19,7 +19,7 @@ export default class Stream extends EventEmitter {
 	private sharedConnectionPools: Pool[] = [];
 	private sharedConnections: SharedConnection[] = [];
 	private nonSharedConnections: NonSharedConnection[] = [];
-	public sentTime: Date = new Date();
+	public sentTime: Date | undefined;
 
 	constructor() {
 		super();
@@ -48,10 +48,22 @@ export default class Stream extends EventEmitter {
 			pool = new Pool(this, channel);
 			this.sharedConnectionPools.push(pool);
 		}
-
-		const connection = new SharedConnection(this, channel, pool);
-		this.sharedConnections.push(connection);
-		return connection;
+		if (this.listenerCount('main') === 0) {
+			const connection = new SharedConnection(this, channel, pool);
+			this.sharedConnections.push(connection);
+			return connection;
+		} else {
+			// すでに接続済みのチャンネルがある場合は
+			// そのチャンネルの接続を再利用する
+			const connection = this.sharedConnections.find(c => c.channel === channel);
+			if (connection) {
+				return connection;
+			} else {
+				const connection = new SharedConnection(this, channel, pool);
+				this.sharedConnections.push(connection);
+				return connection;
+			}
+		}
 	}
 
 	@bindThis
@@ -186,10 +198,12 @@ class Pool {
 	@bindThis
 	public inc() {
 		if (this.users === 0 && !this.isConnected) {
+			log(`inc: connecting to channel ${this.channel} with id ${this.id}`);
 			this.connect();
 		}
 
 		this.users++;
+		log(`inc: ${this.users}`);
 
 		// タイマー解除
 		if (this.disposeTimerId) {
@@ -245,6 +259,7 @@ abstract class Connection extends EventEmitter {
 
 	@bindThis
 	public send(id: string, typeOrPayload, payload?) {
+		this.stream.sentTime = new Date();
 		const type = payload === undefined ? typeOrPayload.type : typeOrPayload;
 		const body = payload === undefined ? typeOrPayload.body : payload;
 
@@ -279,8 +294,9 @@ class SharedConnection extends Connection {
 
 	@bindThis
 	public dispose() {
+		log(`SharedConnection_dispose`);
 		this.pool.dec();
-		this.removeAllListeners();
+		// this.removeAllListeners();
 		this.stream.removeSharedConnection(this);
 	}
 }
@@ -314,6 +330,7 @@ class NonSharedConnection extends Connection {
 
 	@bindThis
 	public dispose() {
+		log(`NonSharedConnection_dispose`);
 		this.removeAllListeners();
 		this.stream.send('disconnect', { id: this.id });
 		this.stream.disconnectToChannel(this);
