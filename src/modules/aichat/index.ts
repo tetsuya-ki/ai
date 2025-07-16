@@ -96,10 +96,10 @@ const GROUNDING_TARGET = 'ggg';
 const YOUTUBE_SITE_URL = 'https://www.youtube.com/';
 const YOUTUBE_SHORT_URL = 'https://youtu.be/';
 
-const GEMINI_25_FLASH_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:generateContent';
+const GEMINI_25_FLASH_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 const GEMINI_20_FLASH_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
-const GEMINI_25_PRO_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro-exp-03-25:generateContent';
-//const GEMINI_15_PRO_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent';
+const GEMINI_25_PRO_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent';
+// const GEMINI_20_PRO_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-pro:generateContent';
 const PLAMO_API = 'https://api.platform.preferredai.jp/v1/chat/completions';
 
 const RANDOMTALK_DEFAULT_PROBABILITY = 0.02;// デフォルトのrandomTalk確率
