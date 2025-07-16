@@ -167,6 +167,10 @@ export default class 藍 {
 		//#region Main stream
 		const mainStream = this.connection.useSharedConnection('main');
 
+		// 一旦すべてのリスナーを削除
+		// これをしないと、再接続時に同じイベントが何度も発火してしまうため
+		mainStream.removeAllListeners();
+
 		// メンションされたとき
 		mainStream.on('mention', async data => {
 			if (data.userId == this.account.id) return; // 自分は弾く
