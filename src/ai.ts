@@ -99,7 +99,6 @@ export default class 藍 {
 				} else {
 					this.log(chalk.green('The memory loaded successfully'));
 					this.run();
-					setInterval(this.reconnect, 1000 * 60 * 5);
 				}
 			}
 		});
@@ -156,13 +155,20 @@ export default class 藍 {
 
 		setInterval(this.logWaking, 10000);
 
+		setInterval(this.reconnect, 1000 * 60 * 5);
+
 		this.log(chalk.green.bold('Ai am now running!'));
 	}
 
 		@bindThis
 		private processStream() {
 		// Init stream
-		this.connection = new Stream();
+		if (!this.connection) {
+			this.connection = new Stream();
+		} else {
+			this.connection.close();
+			this.connection = new Stream(); // 再初期化
+		}
 
 		//#region Main stream
 		const mainStream = this.connection.useSharedConnection('main');

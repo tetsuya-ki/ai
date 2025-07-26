@@ -125,6 +125,7 @@ export default class Stream extends EventEmitter {
 	 */
 	@bindThis
 	private onMessage(message) {
+		this.sentTime = new Date();
 		const { type, body } = JSON.parse(message.data);
 
 		if (type == 'channel') {
@@ -296,7 +297,7 @@ class SharedConnection extends Connection {
 	public dispose() {
 		log(`SharedConnection_dispose`);
 		this.pool.dec();
-		// this.removeAllListeners();
+		this.removeAllListeners();
 		this.stream.removeSharedConnection(this);
 	}
 }
