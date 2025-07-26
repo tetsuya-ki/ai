@@ -6,7 +6,7 @@ import config from '@/config.js';
 import Friend from '@/friend.js';
 import urlToBase64 from '@/utils/url2base64.js';
 import urlToJson from '@/utils/url2json.js';
-import got from 'got';
+import got, { HTTPError } from 'got';
 import loki from 'lokijs';
 
 type AiChat = {
@@ -105,10 +105,12 @@ const PLAMO_API = 'https://api.platform.preferredai.jp/v1/chat/completions';
 const RANDOMTALK_DEFAULT_PROBABILITY = 0.02;// デフォルトのrandomTalk確率
 const TIMEOUT_TIME = 1000 * 60 * 60 * 0.5;// aichatの返信を監視する時間
 const RANDOMTALK_DEFAULT_INTERVAL = 1000 * 60 * 60 * 12;// デフォルトのrandomTalk間隔
+const MEMORY_MAX: number = 5; //個人ごとの記憶の最大件数
 
 export default class extends Module {
 	public readonly name = 'aichat';
 	private aichatHist: loki.Collection<AiChatHist>|undefined;
+	private aichatMemory: loki.Collection<{ userId: string; memory: string[] }> | undefined; // ユーザーごとの記憶
 	private randomTalkProbability: number = RANDOMTALK_DEFAULT_PROBABILITY;
 	private randomTalkIntervalMinutes: number = RANDOMTALK_DEFAULT_INTERVAL;
 
@@ -116,6 +118,10 @@ export default class extends Module {
 	public install() {
 		this.aichatHist = this.ai.getCollection('aichatHist', {
 			indices: ['postId']
+		});
+		// 記憶コレクションを追加
+		this.aichatMemory = this.ai.getCollection('aichatMemory', {
+			indices: ['userId']
 		});
 
 		// 確率は設定されていればそちらを採用(設定がなければデフォルトを採用)
@@ -144,7 +150,7 @@ export default class extends Module {
 	}
 
 	@bindThis
-	private async genTextByGemini(aiChat: AiChat, files:base64File[]) {
+	private async genTextByGemini(aiChat: AiChat, files:base64File[], isMemory: boolean = false): Promise<string> {
 		this.log('Generate Text By Gemini...');
 		let parts: GeminiParts = [];
 		const now = new Date().toLocaleString('ja-JP', {
@@ -156,73 +162,79 @@ export default class extends Module {
 			minute: '2-digit'
 		});
 		// 設定のプロンプトに加え、Misskeyの注意事項やMFM記法について説明
-		let systemInstructionText = aiChat.prompt + 'ただし、リスト記法はMisskeyが対応しておらず、パーサーが壊れるため使用禁止です。列挙する場合は「・」を使ってください。さらにMisskeyではMFM記法を使うため、次のルールを守ってください。引用は行頭に>、フォント変更は$[font.serif テキスト](明朝体風)、$[font.monospace テキスト](等幅フォント)、$[font.cursive テキスト](英数字のみ筆記体)、$[font.fantasy テキスト](英数字のみファンタジー体)が使えます。文字色変更は$[fg.color=f00 テキスト]、背景色変更は$[bg.color=0f0 テキスト]、文字拡大は$[x2 テキスト]、コード表現はバッククオートで囲って`コード`とします。$[...]形式はコマンド、スペース、本文の順に必ず書き、コード表現以外のMFM記法は自由に組み合わせ可能です。背景色(bg.color)はできるだけ使わず、使う場合は明るい色を選び、文字色(fg.color)は人間が読みやすい中間色（暗すぎず明るすぎない色）を選んでください。装飾は使うべきところにだけ使ってください（識別のためなど）。'
-		// LLMは現在時刻を把握していないため、時刻情報を渡す
-		systemInstructionText +='また、現在日時は' + now + 'であり、これは回答の参考にし、時刻を聞かれるまで時刻情報は提供しないこと(なお、他の日時は無効とすること)。';
-		// 名前を伝えておく
-		if (aiChat.friendName != undefined) {
-			systemInstructionText += 'なお、会話相手の名前は' + aiChat.friendName + 'とする。';
-		}
-		// ランダムトーク機能(利用者が意図(メンション)せず発動)の場合、ちょっとだけ配慮しておく
-		if (!aiChat.fromMention) {
-			systemInstructionText += 'これらのメッセージは、あなたに対するメッセージではないことを留意し、返答すること(会話相手は突然話しかけられた認識している)。';
-		}
-		// グラウンディングについてもsystemInstructionTextに追記(こうしないとあまり使わないので)
-		if (aiChat.grounding) {
-			systemInstructionText += '返答のルール2:Google search with grounding.';
-		}
-		// URLから情報を取得
+		let systemInstructionText = '';
 		let youtubeUrl:string = '';
-		if (aiChat.question !== undefined) {
-			const urlexp = RegExp('(https?://[a-zA-Z0-9!?/+_~=:;.,*&@#$%\'-]+)', 'g');
-			const urlarray = [...aiChat.question.matchAll(urlexp)];
-			if (urlarray.length > 0) {
-				for (const url of urlarray) {
-					let targetUrl = url[0];
-					// YouTubeの短いURLの場合、変換し格納
-					if (new RegExp(YOUTUBE_SHORT_URL).test(targetUrl)) {
-						targetUrl = YOUTUBE_SITE_URL + 'watch?v=' + url[0].split(YOUTUBE_SHORT_URL)[1];
-					}
-					// YouTubeのURLが含まれている場合は取り出す(先頭のURLが優先)
-					if (new RegExp(YOUTUBE_SITE_URL).test(targetUrl) && youtubeUrl.length == 0) {
-						this.log('YouTube URL Detected!:' + targetUrl);
-						youtubeUrl = targetUrl;
-					} else {
-						this.log('URL:' + targetUrl);
-					}
-					let result: unknown = null;
-					try{
-						result = await urlToJson(targetUrl);
-					} catch (err: unknown) {
-						systemInstructionText += '補足として提供されたURLは無効でした:URL=>' + targetUrl;
-						this.log('Skip url because error in urlToJson');
-						continue;
-					}
-					const urlpreview: UrlPreview = result as UrlPreview;
-					if (urlpreview.title) {
-						systemInstructionText +=
-							'補足として提供されたURLの情報は次の通り:URL=>' + urlpreview.url
-							+'サイト名('+urlpreview.sitename+')、';
-						if (!urlpreview.sensitive) {
-							systemInstructionText +=
-							'タイトル('+urlpreview.title+')、'
-							+ '説明('+urlpreview.description+')、'
-							+ '質問にあるURLとサイト名・タイトル・説明を組み合わせ、回答の参考にすること。'
-							;
-							this.log('urlpreview.sitename:' + urlpreview.sitename);
-							this.log('urlpreview.title:' + urlpreview.title);
-							this.log('urlpreview.description:' + urlpreview.description);
-						} else {
-							systemInstructionText +=
-							'これはセンシティブなURLの可能性があるため、質問にあるURLとサイト名のみで、回答の参考にすること(使わなくても良い)。'
-							;
+		if (!isMemory) {
+			systemInstructionText = aiChat.prompt + 'ただし、リスト記法はMisskeyが対応しておらず、パーサーが壊れるため使用禁止です。列挙する場合は「・」を使ってください。さらにMisskeyではMFM記法を使うため、次のルールを守ってください。引用は行頭に>、フォント変更は$[font.serif テキスト](明朝体風)、$[font.monospace テキスト](等幅フォント)、$[font.cursive テキスト](英数字のみ筆記体)、$[font.fantasy テキスト](英数字のみファンタジー体)が使えます。文字色変更は$[fg.color=f00 テキスト]、背景色変更は$[bg.color=0f0 テキスト]、文字拡大は$[x2 テキスト]、コード表現はバッククオートで囲って`コード`とします。$[...]形式はコマンド、スペース、本文の順に必ず書き、コード表現以外のMFM記法は自由に組み合わせ可能です。背景色(bg.color)はできるだけ使わず、使う場合は明るい色を選び、文字色(fg.color)は人間が読みやすい中間色（暗すぎず明るすぎない色）を選んでください。装飾は使うべきところにだけ使ってください（識別のためなど）。';
+			// LLMは現在時刻を把握していないため、時刻情報を渡す
+			systemInstructionText += 'また、現在日時は' + now + 'であり、これは回答の参考にし、時刻を聞かれるまで時刻情報は提供しないこと(なお、他の日時は無効とすること)。';
+			// 名前を伝えておく
+			if (aiChat.friendName != undefined) {
+				systemInstructionText += 'なお、会話相手の名前は' + aiChat.friendName + 'とする。';
+			}
+			// ランダムトーク機能(利用者が意図(メンション)せず発動)の場合、ちょっとだけ配慮しておく
+			if (!aiChat.fromMention) {
+				systemInstructionText += 'これらのメッセージは、あなたに対するメッセージではないことを留意し、返答すること(会話相手は突然話しかけられた認識している)。';
+			}
+			// グラウンディングについてもsystemInstructionTextに追記(こうしないとあまり使わないので)
+			if (aiChat.grounding) {
+				systemInstructionText += '返答のルール2:Google search with grounding.';
+			}
+			// URLから情報を取得
+			if (aiChat.question !== undefined) {
+				const urlexp = RegExp('(https?://[a-zA-Z0-9!?/+_~=:;.,*&@#$%\'-]+)', 'g');
+				const urlarray = [...aiChat.question.matchAll(urlexp)];
+				if (urlarray.length > 0) {
+					for (const url of urlarray) {
+						let targetUrl = url[0];
+						// YouTubeの短いURLの場合、変換し格納
+						if (new RegExp(YOUTUBE_SHORT_URL).test(targetUrl)) {
+							targetUrl = YOUTUBE_SITE_URL + 'watch?v=' + url[0].split(YOUTUBE_SHORT_URL)[1];
 						}
-					} else {
-						// 多分ここにはこないが念のため
-						this.log('urlpreview.title is nothing');
+						// YouTubeのURLが含まれている場合は取り出す(先頭のURLが優先)
+						if (new RegExp(YOUTUBE_SITE_URL).test(targetUrl) && youtubeUrl.length == 0) {
+							this.log('YouTube URL Detected!:' + targetUrl);
+							youtubeUrl = targetUrl;
+						} else {
+							this.log('URL:' + targetUrl);
+						}
+						let result: unknown = null;
+						try{
+							result = await urlToJson(targetUrl);
+						} catch (err: unknown) {
+							systemInstructionText += '補足として提供されたURLは無効でした:URL=>' + targetUrl;
+							this.log('Skip url because error in urlToJson');
+							continue;
+						}
+						const urlpreview: UrlPreview = result as UrlPreview;
+						if (urlpreview.title) {
+							systemInstructionText +=
+								'補足として提供されたURLの情報は次の通り:URL=>' + urlpreview.url
+								+'サイト名('+urlpreview.sitename+')、';
+							if (!urlpreview.sensitive) {
+								systemInstructionText +=
+								'タイトル('+urlpreview.title+')、'
+								+ '説明('+urlpreview.description+')、'
+								+ '質問にあるURLとサイト名・タイトル・説明を組み合わせ、回答の参考にすること。'
+								;
+								this.log('urlpreview.sitename:' + urlpreview.sitename);
+								this.log('urlpreview.title:' + urlpreview.title);
+								this.log('urlpreview.description:' + urlpreview.description);
+							} else {
+								systemInstructionText +=
+								'これはセンシティブなURLの可能性があるため、質問にあるURLとサイト名のみで、回答の参考にすること(使わなくても良い)。'
+								;
+							}
+						} else {
+							// 多分ここにはこないが念のため
+							this.log('urlpreview.title is nothing');
+						}
 					}
 				}
 			}
+		} else {
+			// 記憶整理
+			systemInstructionText = 'ユーザーごとの記憶を効率よく管理するのがあなたの役割です。できるだけ短く、要約して記憶を整理してください。';
 		}
 		const systemInstruction: GeminiSystemInstruction = {role: 'system', parts: [{text: systemInstructionText}]};
 
@@ -366,7 +378,23 @@ export default class extends Module {
 			}
 		} catch (err: unknown) {
 			this.log('Error By Call Gemini');
-			if (err instanceof Error) {
+			if (err instanceof HTTPError) {
+				// HTTPErrorの場合、レスポンスのボディを取得
+				this.log(`HTTP Error: ${err.response.statusCode} ${err.response.statusMessage}`);
+				// レスポンスのボディからエラーメッセージを取得
+				if (err.response.body) {
+					let responseText = err.response.body.toString();
+					try {
+						const errorData = JSON.parse(responseText);
+						if (errorData.error && errorData.error.message) {
+							responseText = errorData.error.message;
+						}
+					} catch (jsonErr) {
+						this.log('Failed to parse error response as JSON');
+					}
+					this.log(`Response Body: ${responseText}`);
+				}
+			} else if (err instanceof Error) {
 				this.log(`${err.name}\n${err.message}\n${err.stack}`);
 			}
 		}
@@ -651,6 +679,71 @@ export default class extends Module {
 		return false;
 	}
 
+	// ユーザーの記憶を取得
+	private getUserMemory(userId: string): string[] {
+		const mem = this.aichatMemory?.findOne({ userId });
+		return mem?.memory ?? [];
+	}
+
+	// 古い記憶をAIで要約する
+	private async summarizeMemoryAI(userId: string): Promise<string[]> {
+		const mem = this.aichatMemory?.findOne({ userId });
+		if (!mem || mem.memory.length <= MEMORY_MAX) return mem?.memory ?? [];
+		const memoryText = mem.memory.join('\n');
+		const prompt = `
+あなたはユーザーの記憶管理AIです。以下はユーザーの過去の記憶です。
+${memoryText}
+この記憶を、重要な点だけ残して箇条書きで要約してください。古い・重要でない情報は大胆に省略して構いません。
+`;
+		let summary: string = '';
+		// Gemini優先、なければPLaMo
+		if (config.geminiProApiKey) {
+			const aiChat: AiChat = {
+				question: prompt,
+				prompt: '',
+				api: GEMINI_25_FLASH_API,
+				key: config.geminiProApiKey,
+				history: [],
+				fromMention: true // 要約はメンションから来たものとする
+			};
+			summary = await this.genTextByGemini(aiChat, [], true);
+		} else if (config.pLaMoApiKey) {
+			const aiChat: AiChat = {
+				question: prompt,
+				prompt: '',
+				api: PLAMO_API,
+				key: config.pLaMoApiKey,
+				history: [],
+				fromMention: true // 要約はメンションから来たものとする
+			};
+			summary = await this.genTextByPLaMo(aiChat) ?? '';
+		}
+		if (summary && summary.trim().length > 0) {
+			return summary.split('\n').map(m => m.trim()).filter(m => m.length > 0);
+		} else {
+			this.log('AIによる要約に失敗しました。直近の記憶のみを残します。');
+			return mem.memory.slice(-MEMORY_MAX); // 要約失敗時は直近だけ残す
+		}
+	}
+
+	// ユーザーの記憶に追加（AI要約処理付き）
+	private async addUserMemory(userId: string, text: string) {
+		const normizeText = text.trim().replace(/\$\[\w+\.?\w* (.+?)\]/g, '$1').replace('[', '「').replace(']', '」').replace(/"'/g, '“'); // MFMのフォント記法を正規化
+		let mem = this.aichatMemory?.findOne({ userId });
+		if (!mem) {
+			mem = this.aichatMemory?.insertOne({ userId, memory: [] });
+		}
+		mem?.memory.push(normizeText);
+		// 純粋記憶数を超過した場合、AI要約処理を行う
+		if (mem){
+			if(mem.memory.length > MEMORY_MAX) {
+				this.log(`${userId}: User memory exceeded the limit. Summarizing...`);
+				mem.memory = await this.summarizeMemoryAI(userId);
+			}
+			this.aichatMemory?.update(mem);
+		}
+	}
+
 	@bindThis
 	private async handleAiChat(exist: AiChatHist, msg: Message) {
 		let text: string | null, aiChat: AiChat;
@@ -696,6 +789,12 @@ export default class extends Module {
 							.replace(reKigoType, '')
 							.replace(GROUNDING_TARGET, '')
 							.trim();
+
+		// ここで記憶を取得し、プロンプトに追加
+		const userMemory = this.getUserMemory(msg.userId);
+		if (userMemory.length > 0) {
+			prompt += `\n【あなたの記憶】\n${userMemory.join('\n')}\n`;
+		}
 		switch (exist.type) {
 			case TYPE_GEMINI:
 				// geminiの場合、APIキーが必須
@@ -802,6 +901,58 @@ export default class extends Module {
 		this.setTimeoutWithPersistence(TIMEOUT_TIME, {
 			id: replyId
 		});
+
+		// --- ここでAIに新しい記憶を生成させて保存 ---
+		// AIに「今までの記憶」「今回の質問」「今回の回答」を渡し、「新しい記憶」を生成するよう依頼
+		this.log('Updating memory...');
+		const memoryPrompt = `
+あなたはユーザーの記憶管理AIです。以下は今までの記憶です。
+${userMemory.join('\n')}
+今回の質問: ${question}
+今回の回答: ${processedText}
+これらを踏まえて、今後の会話に役立つように記憶をアップデートしてください(URLは記録不要、AIができることも記録不要(できることが増える可能性があるため)、ユーザーがどういう人物か、自分がどういう雰囲気を求められているかを重点的に記憶するように)。
+`;
+		let newMemory: string = '';
+		switch (exist.type) {
+			case TYPE_GEMINI:
+				// Gemini APIで記憶生成
+				if (!config.geminiProApiKey) {
+					return false;
+				}
+				const memoryAiChat: AiChat = {
+					question: memoryPrompt,
+					prompt: '',
+					api: GEMINI_25_FLASH_API,
+					key: config.geminiProApiKey,
+					history: [],
+					friendName: friendName,
+					fromMention: true // 記憶の生成はメンションから来たものとする
+				};
+				newMemory = await this.genTextByGemini(memoryAiChat, [], true) ?? '';
+				break;
+			case TYPE_PLAMO:
+				if (!config.pLaMoApiKey) {
+					return false;
+				}
+				const memoryAiChatPlamo: AiChat = {
+					question: memoryPrompt,
+					prompt: '',
+					api: PLAMO_API,
+					key: config.pLaMoApiKey,
+					history: [],
+					friendName: friendName,
+					fromMention: true // 記憶の生成はメンションから来たものとする
+				};
+				newMemory = await this.genTextByPLaMo(memoryAiChatPlamo) ?? '';
+				break;
+			default:
+				break;
+		}
+		// 新しい記憶を保存
+		if (newMemory && newMemory.trim().length > 0) {
+			await this.addUserMemory(msg.userId, newMemory);
+		}
+
 		return true;
 	}
 
