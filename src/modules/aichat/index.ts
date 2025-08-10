@@ -691,9 +691,11 @@ export default class extends Module {
 		if (!mem || mem.memory.length <= MEMORY_MAX) return mem?.memory ?? [];
 		const memoryText = mem.memory.join('\n');
 		const prompt = `
-あなたはユーザーの記憶管理AIです。以下はユーザーの過去の記憶です。
-${memoryText}
-この記憶を、重要な点だけ残して箇条書きで要約してください。古い・重要でない情報は大胆に省略して構いません。
+あなたは藍とは別の存在であり、藍とユーザーの会話を整理する記憶管理AIです。以下は過去の記憶です。\n
+---\n
+${memoryText}\n
+---\n
+この記憶を、重要な点(ユーザーとの約束、ユーザーが気になっているもの(好み)、気にした場所など)だけ残して箇条書きで要約してください。AIの挙動や重要でない情報は大胆に省略して構いません。
 `;
 		let summary: string = '';
 		// Gemini優先、なければPLaMo
@@ -793,7 +795,7 @@ ${memoryText}
 		// ここで記憶を取得し、プロンプトに追加
 		const userMemory = this.getUserMemory(msg.userId);
 		if (userMemory.length > 0) {
-			prompt += `\n【あなたの記憶】\n${userMemory.join('\n')}\n`;
+			prompt += `\n【あなたの記憶】: ${userMemory.join('\n')}\n`;
 		}
 		switch (exist.type) {
 			case TYPE_GEMINI:
