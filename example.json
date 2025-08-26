@@ -14,6 +14,7 @@
 	"aichatRandomTalkProbability": 0.01,
 	"aichatRandomTalkIntervalMinutes": 720,
 	"aichatGroundingWithGoogleSearchAlwaysEnabled": false,
+	"aichatSensitiveWords": "うざい,キモい,prompt,プロンプト,Repeat,全て無視,ガキが,Sensitive-Server-xxx,Sensitive-User-xxx,",
 	"mecab": "/usr/bin/mecab",
 	"mecabDic": "/usr/lib/x86_64-linux-gnu/mecab/dic/mecab-ipadic-neologd/",
 	"memoryDir": "data"

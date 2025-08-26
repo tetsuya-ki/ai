@@ -19,6 +19,7 @@ type Config = {
 	aichatRandomTalkProbability?: string;
 	aichatRandomTalkIntervalMinutes?: string;
 	aichatGroundingWithGoogleSearchAlwaysEnabled?: boolean;
+	aichatSensitiveWords?: string;
 	mecab?: string;
 	mecabDic?: string;
 	memoryDir?: string;

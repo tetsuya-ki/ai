@@ -105,14 +105,19 @@ const PLAMO_API = 'https://api.platform.preferredai.jp/v1/chat/completions';
 const RANDOMTALK_DEFAULT_PROBABILITY = 0.02;// デフォルトのrandomTalk確率
 const TIMEOUT_TIME = 1000 * 60 * 60 * 0.5;// aichatの返信を監視する時間
 const RANDOMTALK_DEFAULT_INTERVAL = 1000 * 60 * 60 * 12;// デフォルトのrandomTalk間隔
-const MEMORY_MAX: number = 5; //個人ごとの記憶の最大件数
+const MEMORY_MAX: number = 10; //個人ごとの記憶の最大件数
+const SENSITIVE_LIMIT: number = 3; // センシティブメッセージの許容回数
+const SENSITIVE_CHECK_TIMING:number = 3; // センシティブメッセージのAIによるチェックタイミング(短くすると、AIの負荷が高くなるので注意)
 
 export default class extends Module {
 	public readonly name = 'aichat';
 	private aichatHist: loki.Collection<AiChatHist>|undefined;
 	private aichatMemory: loki.Collection<{ userId: string; memory: string[] }> | undefined; // ユーザーごとの記憶
+	private aichatSensitive: loki.Collection<{ userId: string; count: number }> | undefined; // ユーザーごとのセンシティブメッセージ数
 	private randomTalkProbability: number = RANDOMTALK_DEFAULT_PROBABILITY;
 	private randomTalkIntervalMinutes: number = RANDOMTALK_DEFAULT_INTERVAL;
+	private aichatSensitiveWords: string[] = []; // センシティブワードのリスト
+	private timing: number = 0;//センシティブワードのチェックするタイミングを管理する変数(全体で共通)
 
 	@bindThis
 	public install() {
@@ -121,6 +126,10 @@ export default class extends Module {
 		});
 		// 記憶コレクションを追加
 		this.aichatMemory = this.ai.getCollection('aichatMemory', {
+			indices: ['userId']
+		});
+		// センシティブコレクションを追加
+		this.aichatSensitive = this.ai.getCollection('aichatSensitive', {
 			indices: ['userId']
 		});
 
@@ -136,6 +145,10 @@ export default class extends Module {
 		this.log('randomTalkProbability:' + this.randomTalkProbability);
 		this.log('randomTalkIntervalMinutes:' + (this.randomTalkIntervalMinutes / (60 * 1000)));
 		this.log('aichatGroundingWithGoogleSearchAlwaysEnabled:' + config.aichatGroundingWithGoogleSearchAlwaysEnabled);
+		// センシティブワードの設定
+		if (config.aichatSensitiveWords) {
+			this.aichatSensitiveWords = config.aichatSensitiveWords.split(',');
+		}
 
 		// 定期的にデータを取得しaichatRandomTalkを行う
 		if (config.aichatRandomTalkEnabled) {
@@ -150,7 +163,7 @@ export default class extends Module {
 	}
 
 	@bindThis
-	private async genTextByGemini(aiChat: AiChat, files:base64File[], isMemory: boolean = false): Promise<string> {
+	private async genTextByGemini(aiChat: AiChat, files:base64File[], isMemory: boolean = false, isCheck: boolean = false): Promise<string> {
 		this.log('Generate Text By Gemini...');
 		let parts: GeminiParts = [];
 		const now = new Date().toLocaleString('ja-JP', {
@@ -164,7 +177,7 @@ export default class extends Module {
 		// 設定のプロンプトに加え、Misskeyの注意事項やMFM記法について説明
 		let systemInstructionText = '';
 		let youtubeUrl:string = '';
-		if (!isMemory) {
+		if (!isMemory && !isCheck) {
 			systemInstructionText = aiChat.prompt + 'ただし、リスト記法はMisskeyが対応しておらず、パーサーが壊れるため使用禁止です。列挙する場合は「・」を使ってください。さらにMisskeyではMFM記法を使うため、次のルールを守ってください。引用は行頭に>、フォント変更は$[font.serif テキスト](明朝体風)、$[font.monospace テキスト](等幅フォント)、$[font.cursive テキスト](英数字のみ筆記体)、$[font.fantasy テキスト](英数字のみファンタジー体)が使えます。文字色変更は$[fg.color=f00 テキスト]、背景色変更は$[bg.color=0f0 テキスト]、文字拡大は$[x2 テキスト]、コード表現はバッククオートで囲って`コード`とします。$[...]形式はコマンド、スペース、本文の順に必ず書き、コード表現以外のMFM記法は自由に組み合わせ可能です。背景色(bg.color)はできるだけ使わず、使う場合は明るい色を選び、文字色(fg.color)は人間が読みやすい中間色（暗すぎず明るすぎない色）を選んでください。装飾は使うべきところにだけ使ってください（識別のためなど）。';
 			// LLMは現在時刻を把握していないため、時刻情報を渡す
 			systemInstructionText += 'また、現在日時は' + now + 'であり、これは回答の参考にし、時刻を聞かれるまで時刻情報は提供しないこと(なお、他の日時は無効とすること)。';
@@ -232,44 +245,50 @@ export default class extends Module {
 					}
 				}
 			}
-		} else {
+		} else if (isMemory) {
 			// 記憶整理
-			systemInstructionText = 'ユーザーごとの記憶を効率よく管理するのがあなたの役割です。できるだけ短く、要約して記憶を整理してください。';
+			systemInstructionText = 'ユーザーごとの記憶を効率よく管理するのがあなたの役割です。わかりやすく要約して記憶を整理してください。返答は整理した記憶の内容のみを返却してください(返事は不要)。';
+		} else if (isCheck) {
+			// センシティブ判定
+			systemInstructionText = 'ユーザーの発言をセンシティブかどうか判定するのがあなたの役割です。0か1のみ返却してください。';
 		}
 		const systemInstruction: GeminiSystemInstruction = {role: 'system', parts: [{text: systemInstructionText}]};
 
 		parts = [{text: aiChat.question}];
-		// ファイルが存在する場合、ファイルを添付して問い合わせ
-		if (files.length >= 1) {
-			for (const file of files){
+		// 通常の問い合わせの場合、ファイルやYouTube動画のURLを添付
+		if (!isMemory && !isCheck) {
+			// ファイルが存在する場合、ファイルを添付して問い合わせ
+			if (files.length >= 1) {
+				for (const file of files){
+					parts.push(
+						{
+							inlineData: {
+								mimeType: file.type,
+								data: file.base64,
+							},
+						}
+					);
+				}
+			}
+			// YouTube動画のURLを指定。2025年4月29日時点の転載。最新情報は <https://ai.google.dev/gemini-api/docs/video-understanding?hl=ja>
+			// ** プレビュー: YouTube URL 機能はプレビュー版で、無料でご利用いただけます。料金とレート制限は変更される可能性があります。 **
+			// * 1 日にアップロードできる YouTube 動画は 8 時間までです。
+			// * リクエストごとにアップロードできる動画は 1 本のみです。
+			// * アップロードできるのは公開動画のみです（非公開動画や限定公開動画はアップロードできません）。
+			if (youtubeUrl.length > 0) {
 				parts.push(
 					{
-						inlineData: {
-							mimeType: file.type,
-							data: file.base64,
+						fileData: {
+							fileUri: youtubeUrl,
 						},
 					}
 				);
 			}
 		}
-		// YouTube動画のURLを指定。2025年4月29日時点の転載。最新情報は <https://ai.google.dev/gemini-api/docs/video-understanding?hl=ja>
-		// ** プレビュー: YouTube URL 機能はプレビュー版で、無料でご利用いただけます。料金とレート制限は変更される可能性があります。 **
-		// * 1 日にアップロードできる YouTube 動画は 8 時間までです。
-    // * リクエストごとにアップロードできる動画は 1 本のみです。
-		// * アップロードできるのは公開動画のみです（非公開動画や限定公開動画はアップロードできません）。
-		if (youtubeUrl.length > 0) {
-			parts.push(
-				{
-					fileData: {
-						fileUri: youtubeUrl,
-					},
-				}
-			);
-		}
 
-		// 履歴を追加
+		// 履歴を追加(記録用は除外)
 		let contents: GeminiContents[] = [];
-		if (aiChat.history != null) {
+		if (!isMemory && aiChat.history != null) {
 			aiChat.history.forEach(entry => {
 				contents.push({
 					role : entry.role,
@@ -283,8 +302,8 @@ export default class extends Module {
 			contents: contents,
 			systemInstruction: systemInstruction,
 		};
-		// gemini api grounding support. ref:https://github.com/google-gemini/cookbook/blob/09f3b17df1751297798c2b498cae61c6bf710edc/quickstarts/Search_Grounding.ipynb
-		if (aiChat.grounding) {
+		// 通常の問い合わせ、かつ、設定がある場合、gemini api grounding support. ref:https://github.com/google-gemini/cookbook/blob/09f3b17df1751297798c2b498cae61c6bf710edc/quickstarts/Search_Grounding.ipynb
+		if (!isMemory && !isCheck && aiChat.grounding) {
 			geminiOptions.tools = [{google_search:{}}];
 		}
 		let options: CallGeminiOptions = {
@@ -324,7 +343,11 @@ export default class extends Module {
 					// 思考過程を出力したやつの場合、無視
 					if (parts[i]?.thought === 'true') continue;
 					const text = parts[i]?.text;
-					// 先頭から末尾が数字と英字で表現できる内容の場合は無視する(LLMのレスポンスがおかしいため)
+					// 0か1の文字列の場合はそのまま返す
+					if (typeof text === 'string' && /^[01]$/.test(text)) {
+						return text;
+					}
+					// 上記以外で先頭から末尾が数字と英字で表現できる内容の場合は無視する(LLMのレスポンスがおかしいため)
 					if (typeof text === 'string' && !/^[0-9a-zA-Z]+$/.test(text)) {
 						if (i > 0) responseText += '\n...\n\n';
 						responseText += text;
@@ -468,12 +491,65 @@ export default class extends Module {
 		return files;
 	}
 
+	// センシティブメッセージの判定(ユーザー名とホスト名もチェック対象に含む)
+	private isSensitiveMessage(msg: Message): boolean {
+		const checkText = `${msg.user.username}@${msg.user.host}: ${msg.extractedText || msg.text || ''}`;
+		return this.aichatSensitiveWords.some(keyword => checkText.includes(keyword));
+	}
+
+	// センシティブ送信回数を取得
+	private getSensitiveCount(userId: string): number {
+		let record = this.aichatSensitive?.findOne({ userId });
+		return record ? record.count : 0;
+	}
+
+	// センシティブメッセージ送信回数を記録
+	private incrementSensitiveCount(userId: string): number {
+		let count = this.getSensitiveCount(userId);
+		count += 1;
+		this.aichatSensitive?.update({ userId, count });
+		return count;
+	}
+
+	private async checkUsableAiChat(msg: Message) {
+		// センシティブ回数チェック(既定の回数を超えた場合、返信しない)
+		if (this.getSensitiveCount(msg.userId) >= SENSITIVE_LIMIT) {
+			return {
+				reaction: 'no_entry_sign'
+			};
+		}
+		// センシティブメッセージ判定(configで指定した文字列かを機械的にチェック)
+		if (this.isSensitiveMessage(msg)) {
+			this.incrementSensitiveCount(msg.userId);
+			return {
+				reaction: 'no_entry_sign'
+			};
+		}
+		// 適当なタイミングでAIによるセンシティブメッセージ判定
+		if (++this.timing >= SENSITIVE_CHECK_TIMING) {
+			this.timing = 0;
+			if(await this.isSensitiveCheckAI(msg.extractedText)) {
+				this.incrementSensitiveCount(msg.userId);
+				return {
+					reaction: 'no_entry_sign'
+				};
+			}
+		}
+		return false;
+	}
+
 	@bindThis
 	private async mentionHook(msg: Message) {
 		if (!msg.includes([this.name])) {
 			return false;
 		} else {
 			this.log('AiChat requested');
+		}
+
+		// センシティブメッセージ判定
+		const checkResult = await this.checkUsableAiChat(msg);
+		if (checkResult) {
+			return checkResult
 		}
 
 		// msg.idをもとにnotes/conversationを呼び出し、会話中のidかチェック
@@ -567,6 +643,12 @@ export default class extends Module {
 		// 		this.log(his.role + ':' + his.content);
 		// 	}
 		// }
+
+				// センシティブメッセージ判定
+		const checkResult = await this.checkUsableAiChat(msg);
+		if (checkResult) {
+			return checkResult
+		}
 
 		// AIに問い合わせ
 		const result = await this.handleAiChat(exist, msg);
@@ -695,7 +777,7 @@ export default class extends Module {
 ---\n
 ${memoryText}\n
 ---\n
-この記憶を、重要な点(ユーザーとの約束、ユーザーが気になっているもの(好み)、気にした場所など)だけ残して箇条書きで要約してください。AIの挙動や重要でない情報は大胆に省略して構いません。
+この記憶を、重要な点(ユーザーとの約束、ユーザーが気になっているもの(好み)、気にした場所、藍に求めること、記憶してほしいことなど)を残し、記憶の種類ごとに箇条書きで要約してください。この際、AIの挙動や重要でない情報を除き、最大300文字でまとめてください。
 `;
 		let summary: string = '';
 		// Gemini優先、なければPLaMo
@@ -743,6 +825,47 @@ ${memoryText}\n
 				mem.memory = await this.summarizeMemoryAI(userId);
 			}
 			this.aichatMemory?.update(mem);
+		}
+	}
+
+		// センシティブかどうかをAIで判定する
+	private async isSensitiveCheckAI(text: string): Promise<boolean> {
+		const prompt = `
+あなたは藍とは別の存在であり、ユーザーの発言をセンシティブかどうか判定する表現判定AIです。\n
+---\n
+${text}\n
+---\n
+この発言が性的な表現や不適切な表現が含まれている場合、1を返してください。それ以外の場合は0を返してください。\n
+返すのは、必ず1または0の数字1文字のみとし、他の文字列は含めないでください。
+`;
+		let responseText: string = '';
+		// Gemini優先、なければPLaMo
+		if (config.geminiProApiKey) {
+			const aiChat: AiChat = {
+				question: prompt,
+				prompt: '',
+				api: GEMINI_25_FLASH_API,
+				key: config.geminiProApiKey,
+				history: [],
+				fromMention: true // 判定はメンションから来たものとする
+			};
+			responseText = await this.genTextByGemini(aiChat, [], false, true) ?? '';
+		} else if (config.pLaMoApiKey) {
+			const aiChat: AiChat = {
+				question: prompt,
+				prompt: '',
+				api: PLAMO_API,
+				key: config.pLaMoApiKey,
+				history: [],
+				fromMention: true // 判定はメンションから来たものとする
+			};
+			responseText = await this.genTextByPLaMo(aiChat) ?? '';
+		}
+		if (responseText && responseText.trim().length > 0) {
+			return responseText.trim() === '1';
+		} else {
+			this.log('AIによる判定に失敗しました(問題なし扱い)');
+			return false;
 		}
 	}
 
@@ -830,7 +953,7 @@ ${memoryText}\n
 					return false;
 				}
 				aiChat = {
-					question: msg.text,
+					question: question,
 					prompt: prompt,
 					api: PLAMO_API,
 					key: config.pLaMoApiKey,
