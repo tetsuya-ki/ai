@@ -54,8 +54,8 @@ type Game = {
 };
 
 const MINIMUM_PLAYERS = 2; // 最低参加人数(3人以上を推奨)
-const GAME_END_POINTS = 3; // ゲーム終了に必要なポイント
-const HANDS_SIZE = 5; // 手札の枚数(10枚以下じゃないとおかしくなる)
+const GAME_END_POINTS = 2; // ゲーム終了に必要なポイント
+const HANDS_SIZE = 3; // 手札の枚数(10枚以下じゃないとおかしくなる)
 const WAIT_TIME_FOR_PLAYERS = 1000 * 60 * 1; // 参加者募集時間: 1分
 const GAME_TIME_LIMIT = 1000 * 60 * 10; // ゲーム全体の制限時間: 10分
 
@@ -71,7 +71,7 @@ export default class extends Module {
 	@bindThis
 	public install() {
 		const dataFilePath = path.resolve('data/ohgiri.json');
-		this.log(`Loading ohgiri data from ${dataFilePath}`);
+		this.log(chalk.greenBright(`[Ohgiri:install] Loading ohgiri data from ${dataFilePath}`));
 		this.ohgiriData = JSON.parse(fs.readFileSync(dataFilePath, 'utf-8'));
 		this.ohgiriGames = this.ai.getCollection('ohgiri');
 		setInterval(this.crawleGameEnd, 5000);
@@ -118,7 +118,7 @@ export default class extends Module {
 		};
 		this.ohgiriGames.insertOne(newGame);
 
-		this.log('New ohgiri game created. Waiting for players...');
+		this.log(chalk.greenBright('New ohgiri game created. Waiting for players...'));
 		// 募集投稿へのリプライ/リアクションを監視
 		this.ai.subscribeReply(this, 'game-setup', post.id);
 
@@ -139,7 +139,7 @@ export default class extends Module {
 				return { reaction: 'confused' }; // 既に参加済み
 			}
 
-			this.log(`Player joined: ${acct(msg.user)}`);
+			this.log(chalk.greenBright(`Player joined: ${acct(msg.user)}`));
 			game.players.push({
 				id: msg.userId,
 				username: msg.user.username,
@@ -167,11 +167,11 @@ export default class extends Module {
 			this.ai.post({ renoteId: game.postId, text: serifs.ohgiri.notEnoughPlayers(MINIMUM_PLAYERS - 1)});
 			game.isEnded = true;
 			this.ohgiriGames.update(game);
-			this.log('Ohgiri game aborted due to lack of players.');
+			this.log(chalk.redBright('Ohgiri game aborted due to lack of players.'));
 			return;
 		}
 
-		this.log('Starting ohgiri game!');
+		this.log(chalk.greenBright('Starting ohgiri game!'));
 
 		// 最初の親をランダムに決定
 		game.houseId = game.players[Math.floor(Math.random() * game.players.length)].id;
@@ -198,7 +198,7 @@ export default class extends Module {
 		game.currentOdai = this.ohgiriData.subject[Math.floor(Math.random() * this.ohgiriData.subject.length)];
 		const house = game.players.find(p => p.id === game.houseId)!;
 
-		this.log(`Turn ${game.turn} started. Odai: ${game.currentOdai}, House: ${house.username}`);
+		this.log(chalk.greenBright(`Turn ${game.turn} started. Odai: ${game.currentOdai}, House: ${house.username}`));
 
 		// 前の監視対象投稿があれば、そのコンテキストを解除
 		if (game.activeReactionNoteId) {
@@ -232,10 +232,10 @@ export default class extends Module {
 	// プレイヤーのリアクションを処理 (回答提出、親の選択)
 	@bindThis
 	private async reactionHook(reaction: string, user: User, msg: Message) {
-		this.log(`reactionHook(ohgiri): ${reaction} from ${acct(user)} on note ${msg.id}`);
+		this.log(chalk.greenBright(`reactionHook(ohgiri): ${reaction} from ${acct(user)} on note ${msg.id}`));
 		const game = this.ohgiriGames.findOne({ isEnded: false });
 		if (!game) {
-			this.log(chalk.yellow(`[Ohgiri] reactionHook called but no active game found.`));
+			this.log(chalk.yellow(`reactionHook(ohgiri): reactionHook called but no active game found.`));
 			return;
 		}
 
@@ -246,7 +246,7 @@ export default class extends Module {
 
 		// 現在監視している投稿IDに対するリアクションのみを処理
 		if (msg.id !== game.activeReactionNoteId) {
-			this.log(chalk.yellow(`[Ohgiri] Ignoring reaction on non-active note: ${msg.id}. Active: ${game.activeReactionNoteId}`));
+			this.log(chalk.yellow(`reactionHook(ohgiri): Ignoring reaction on non-active note: ${msg.id}. Active: ${game.activeReactionNoteId}`));
 			// 無関係な投稿へのリアクションには「confused」で反応を返す
 			this.ai.api('notes/reactions/create', {
 				noteId: msg.id,
@@ -263,7 +263,7 @@ export default class extends Module {
 			choiceIndex = numberEmojis2.indexOf(reaction);
 			// 数字リアクション以外の場合のハンドリング
 			if (choiceIndex === -1) {
-				this.log(chalk.yellow(`[Ohgiri] Non-numeric reaction received: ${reaction}. Responding with 'confused'.`));
+				this.log(chalk.yellow(`reactionHook(ohgiri): Non-numeric reaction received: ${reaction}. Responding with 'confused'.`));
 				// 数字リアクションではないため、confusedでリアクションを返して処理を終了
 				this.ai.api('notes/reactions/create', {
 					noteId: msg.id,
@@ -284,7 +284,7 @@ export default class extends Module {
 				this.handleHouseChoice(game, user.id, choiceIndex);
 				break;
 			default:
-					this.log(chalk.yellow(`[Ohgiri] Unexpected game state for reaction: ${game.state}`));
+					this.log(chalk.yellow(`reactionHook(ohgiri): Unexpected game state for reaction: ${game.state}`));
 					this.ai.api('notes/reactions/create', {
 							noteId: msg.id,
 							reaction: 'confused'
@@ -465,7 +465,7 @@ export default class extends Module {
 
 		if (winnerPlayer) {
 			winnerPlayer.points++;
-			this.log(`Winner is ${winnerPlayer.username}. Points: ${winnerPlayer.points}`);
+			this.log(chalk.cyanBright(`Winner is ${winnerPlayer.username}. Points: ${winnerPlayer.points}`));
 			await this.ai.post({ renoteId: game.postId, text: serifs.ohgiri.playerWin(acct(winnerPlayer), chosenAnswer.card, winnerPlayer.points) });
 			game.houseId = winnerPlayer.id; // 次の親は勝者
 
@@ -476,7 +476,7 @@ export default class extends Module {
 		} else { // ダミーカードが選ばれた場合は親は継続
 			const house = game.players.find(p => p.id === game.houseId)!;
 			house.points = Math.max(0, house.points - 1);
-			this.log(`Dummy was chosen. House ${house.username} loses a point. Points: ${house.points}`);
+			this.log(chalk.cyanBright(`Dummy was chosen. House ${house.username} loses a point. Points: ${house.points}`));
 			await this.ai.post({ renoteId: game.postId, text: serifs.ohgiri.dummyWin(chosenAnswer.card, acct(house), house.points) });
 		}
 
@@ -506,10 +506,10 @@ export default class extends Module {
 
 		// 終了メッセージを出力し、ゲームを終了
 		if (winner === undefined){
-			this.log(`Game ended with no winner.`);
+			this.log(chalk.green.bold(`[Ohgiri:finish] Game ended with no winner.`));
 			this.ai.post({ renoteId: game.postId, text: serifs.ohgiri.noWinner });
 		} else {
-			this.log(`Game ended. Winner: ${winner.username}`);
+			this.log(chalk.green.bold(`[Ohgiri:finish] Game ended. Winner: ${winner.username}`));
 			const historyText = game.history.map(h => {
 				const chosenPlayer = h.answers.find(a => a.card === h.chosen.card)?.player;
 				const winnerAcct = chosenPlayer ? acct(chosenPlayer) : 'ダミー';
@@ -520,6 +520,11 @@ export default class extends Module {
 			this.ai.post({ renoteId: game.postId, text: serifs.ohgiri.finish(acct(winner), historyText) });
 		}
 		this.ohgiriGames.update(game);
+
+		// 古いゲームを記録から削除
+		for (const game of this.ohgiriGames.find({ isEnded: true })) {
+			this.ohgiriGames.remove(game);
+		}
 	}
 
 	// 時間切れでゲームを強制終了
