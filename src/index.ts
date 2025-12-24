@@ -35,6 +35,7 @@ import PollModule from './modules/poll/index.js';
 import ReminderModule from './modules/reminder/index.js';
 import CheckCustomEmojisModule from './modules/check-custom-emojis/index.js';
 import AiChatModule from './modules/aichat/index.js';
+import ohgiriGameModule from './modules/ohgiri/index.js';
 
 console.log('   __    ____  _____  ___ ');
 console.log('  /__\\  (_  _)(  _  )/ __)');
@@ -98,6 +99,7 @@ promiseRetry(retry => {
 		new SleepReportModule(),
 		new NotingModule(),
 		new PollModule(),
+		new ohgiriGameModule(),
 	]);
 }).catch(e => {
 	log(chalk.red('Failed to fetch the account'));

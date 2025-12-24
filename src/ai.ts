@@ -20,6 +20,7 @@ import pkg from '../package.json' with { type: 'json' };
 
 type MentionHook = (msg: Message) => Promise<boolean | HandlerResult>;
 type ContextHook = (key: any, msg: Message, data?: any) => Promise<void | boolean | HandlerResult>;
+type ReactionHook = (reaction: string, user: User, msg: Message) => Promise<void | boolean | HandlerResult>;
 type TimeoutCallback = (data?: any) => void;
 
 export type HandlerResult = {
@@ -30,6 +31,7 @@ export type HandlerResult = {
 export type InstallerResult = {
 	mentionHook?: MentionHook;
 	contextHook?: ContextHook;
+	reactionHook?: ReactionHook; // reactionHookを追加
 	timeoutCallback?: TimeoutCallback;
 };
 
@@ -47,6 +49,7 @@ export default class 藍 {
 	public modules: Module[] = [];
 	private mentionHooks: MentionHook[] = [];
 	private contextHooks: { [moduleName: string]: ContextHook } = {};
+	private reactionHooks: { [moduleName: string]: ReactionHook } = {};
 	private timeoutCallbacks: { [moduleName: string]: TimeoutCallback } = {};
 	public db: loki;
 	public lastSleepedAt: number;
@@ -145,6 +148,10 @@ export default class 藍 {
 			if (res != null) {
 				if (res.mentionHook) this.mentionHooks.push(res.mentionHook);
 				if (res.contextHook) this.contextHooks[m.name] = res.contextHook;
+				if (res.reactionHook) {
+					this.reactionHooks[m.name] = res.reactionHook;
+					this.log(chalk.green(`ReactionHook registered for module: ${m.name}`)); // 追加ログ
+				}
 				if (res.timeoutCallback) this.timeoutCallbacks[m.name] = res.timeoutCallback;
 			}
 		});
@@ -312,11 +319,42 @@ export default class 藍 {
 	}
 
 	@bindThis
-	private onNotification(notification: any) {
+	private async onNotification(notification: any) { // asyncを追加
 		switch (notification.type) {
-			// リアクションされたら親愛度を少し上げる
-			// TODO: リアクション取り消しをよしなにハンドリングする
+			// リアクションされたとき
 			case 'reaction': {
+				this.log(`[Notification] A reaction(${notification.reaction}) received for note ID: ${notification.note.id} by user: ${notification.user.username}.`);
+
+				// リアクションされた投稿(note)が、監視対象としてコンテキストに登録されているか探す
+				const context = this.contexts.findOne({ noteId: notification.note.id });
+
+				if (context == null) {
+					this.log(chalk.yellow(`[Notification] No context found for note ID: ${notification.note.id}.`));
+					// コンテキストがない場合でも親愛度を上げる処理は実行
+					const friend = new Friend(this, { user: notification.user });
+					friend.incLove(0.1);
+					return; // コンテキストがないのでreactionHookは呼び出さない
+				}
+
+				this.log(chalk.blue(`[Notification] Context found for note ID: ${notification.note.id}, module: ${context.module}, key: ${context.key}.`));
+
+
+				// コンテキストがあり、そのモジュールにリアクションフックが登録されていれば呼び出す
+				if (this.reactionHooks[context.module]) {
+					const handler = this.reactionHooks[context.module];
+					// Messageオブジェクトを生成して渡す
+					const msg = new Message(this, notification.note);
+
+					this.log(chalk.gray(`<<< A reaction received: ${notification.reaction} to ${chalk.underline(msg.id)} by ${notification.user.username}`));
+					this.log(chalk.green(`[Notification] Invoking reactionHook for module: ${context.module}.`)); // 追加ログ
+
+					// フックを実行
+					await handler(notification.reaction, notification.user, msg);
+				} else {
+					this.log(chalk.yellow(`[Notification] No reactionHook registered for module: ${context.module}. Available hooks: ${Object.keys(this.reactionHooks).join(', ')}`)); // 追加ログ
+				}
+
+				// 親愛度を少し上げる処理はそのまま実行
 				const friend = new Friend(this, { user: notification.user });
 				friend.incLove(0.1);
 				break;
@@ -426,39 +464,41 @@ export default class 藍 {
 	};
 
 	/**
-	 * コンテキストを生成し、ユーザーからの返信を待ち受けます
-	 * @param module 待ち受けるモジュール名
-	 * @param key コンテキストを識別するためのキー
-	 * @param id トークメッセージ上のコンテキストならばトーク相手のID、そうでないなら待ち受ける投稿のID
+	 * コンテキストを生成し、ユーザーからの返信やリアクションを待ち受けます
+	 * @param module 待ち受けるモジュール
+	 * @param key コンテキストを識別するためのキー (リプライ用)
+	 * @param noteId 待ち受ける投稿のID
 	 * @param data コンテキストに保存するオプションのデータ
 	 */
 	@bindThis
-	public subscribeReply(module: Module, key: string | null, id: string, data?: any) {
+	public subscribeReply(module: Module, key: string | null, noteId: string, data?: any) {
 		this.contexts.insertOne({
-			noteId: id,
+			noteId: noteId,
 			module: module.name,
 			key: key,
 			data: data
 		});
+		this.log(chalk.cyan(`[Context] Subscribed reply for module: ${module.name}, key: ${key}, noteId: ${noteId}`)); // 追加ログ
 	}
 
 	/**
-	 * 返信の待ち受けを解除します
-	 * @param module 解除するモジュール名
+	 * 返信やリアクションの待ち受けを解除します
+	 * @param module 解除するモジュール
 	 * @param key コンテキストを識別するためのキー
 	 */
 	@bindThis
 	public unsubscribeReply(module: Module, key: string | null) {
-		this.contexts.findAndRemove({
+		const removed = this.contexts.findAndRemove({
 			key: key,
 			module: module.name
 		});
+		this.log(chalk.cyan(`[Context] Unsubscribed reply for module: ${module.name}, key: ${key}. Removed entries.`)); // 追加ログ
 	}
 
 	/**
 	 * 指定したミリ秒経過後に、そのモジュールのタイムアウトコールバックを呼び出します。
 	 * このタイマーは記憶に永続化されるので、途中でプロセスを再起動しても有効です。
-	 * @param module モジュール名
+	 * @param module モジュール
 	 * @param delay ミリ秒
 	 * @param data オプションのデータ
 	 */

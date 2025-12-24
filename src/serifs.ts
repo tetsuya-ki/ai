@@ -395,6 +395,21 @@ export default {
 		post: (text, type) => `${text} (${type}) #aichat`,
 	},
 
+	ohgiri: {
+    alreadyStarted: '現在進行中の大喜利ゲームがあります！',
+    intro: (min: number, minimumPlayers: number) => `大喜利を始めます！\n**${min}分間**、参加者を募集します。\nこの投稿に「**参加**」とリプライしてエントリーしてください！\n\n${minimumPlayers}人以上でゲーム開始です！`,
+    notEnoughPlayers: (minimumPlayersMinusOne: number) => `参加者が${minimumPlayersMinusOne}人未満だったため、ゲームはお流れになりました。`,
+    gameStart: (players: string, winPoints: number) => `参加者は ${players}、勝利点は${winPoints} です。\n大喜利ゲームを開始します！`,
+    turnStart: (turn: number, odai: string, house: string) => `**第${turn}問**\n\nお題: **${odai}**\n\n今回の親は ${house} さんです。\n親以外の人は、DMで送られた手札の番号に対応するリアクション（1️⃣, 2️⃣, ..., 🔟 など）で回答してください！`,
+    handInfo: (hand: string[]) => `あなたのお題への回答手札です:\n${hand.map((c, i) => `${i + 1}: ${c}`).join('\n')}`,
+    choices: (house: string, choices: string) => `${house} さん、一番面白いと思った回答を選んでください！\n${choices}\n\n回答の番号に対応するリアクションで選択してください。`,
+    playerWin: (player: string, card: string, points: number) => `親が選んだのは ${player} さんの回答「**${card}**」でした！\n\n${player} さんは1ポイント獲得！ (現在 ${points} ポイント)\n次の親は ${player} さんです。`,
+    dummyWin: (card: string, house: string, points: number) => `親が選んだのはダミーの回答「**${card}**」でした！\n\n残念！ ${house} さんは1ポイント減点... (現在 ${points} ポイント)\n親は継続です。`,
+    finish: (winner: string, history: string) => `**ゲーム終了！**\n\n🎉 優勝者は **${winner}** さんです！おめでとうございます！ 🎉\n\n--- 今回生まれた傑作たち ---\n\n${history} #aiOhgiri \n`,
+    timeout: '時間切れのため、ゲームを終了します。',
+    noWinner: '今回は勝者はいませんでした。'
+  },
+
 	sleepReport: {
 		report: hours => `んぅ、${hours}時間くらい寝ちゃってたみたいです`,
 		reportUtatane: 'ん... うたた寝しちゃってました',
