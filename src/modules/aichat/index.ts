@@ -8,6 +8,8 @@ import urlToBase64 from '@/utils/url2base64.js';
 import urlToJson from '@/utils/url2json.js';
 import got, { HTTPError } from 'got';
 import loki from 'lokijs';
+import FunctionExecutor, { FunctionCall } from './function-executor.js';
+import { getGeminiFunctionSchema } from './functions.js';
 
 type AiChat = {
 	question: string;
@@ -18,6 +20,7 @@ type AiChat = {
 	friendName?: string;
 	grounding?: boolean;
 	history?: { role: string; content: string }[];
+	userId?: string;
 };
 type base64File = {
 	type: string;
@@ -46,7 +49,7 @@ type GeminiContents = {
 type GeminiOptions = {
 	contents?: GeminiContents[],
 	systemInstruction?: GeminiSystemInstruction,
-	tools?: [{}]
+	tools?: any[]
 };
 
 type CallGeminiOptions  = {
@@ -55,6 +58,7 @@ type CallGeminiOptions  = {
 		key: string,
 	},
 	json: GeminiOptions,
+	userId?: string,
 };
 
 type AiChatHist = {
@@ -118,6 +122,7 @@ export default class extends Module {
 	private randomTalkIntervalMinutes: number = RANDOMTALK_DEFAULT_INTERVAL;
 	private aichatSensitiveWords: string[] = []; // センシティブワードのリスト
 	private timing: number = 0;//センシティブワードのチェックするタイミングを管理する変数(全体で共通)
+	private functionExecutor: FunctionExecutor | undefined;
 
 	@bindThis
 	public install() {
@@ -132,6 +137,9 @@ export default class extends Module {
 		this.aichatSensitive = this.ai.getCollection('aichatSensitive', {
 			indices: ['userId']
 		});
+
+		// Function Executorを初期化
+		this.functionExecutor = new FunctionExecutor(this.ai);
 
 		// 確率は設定されていればそちらを採用(設定がなければデフォルトを採用)
 		if (config.aichatRandomTalkProbability != undefined && !Number.isNaN(Number.parseFloat(config.aichatRandomTalkProbability))) {
@@ -304,7 +312,16 @@ export default class extends Module {
 		};
 		// 通常の問い合わせ、かつ、設定がある場合、gemini api grounding support. ref:https://github.com/google-gemini/cookbook/blob/09f3b17df1751297798c2b498cae61c6bf710edc/quickstarts/Search_Grounding.ipynb
 		if (!isMemory && !isCheck && aiChat.grounding) {
-			geminiOptions.tools = [{google_search:{}}];
+			geminiOptions.tools = [{google_search:{}} as any];
+		}
+		// Function Calling対応：通常の問い合わせの場合、利用可能な関数を追加
+		if (!isMemory && !isCheck) {
+			if (!geminiOptions.tools) {
+				geminiOptions.tools = [];
+			}
+			(geminiOptions.tools as any[]).push({
+				functionDeclarations: getGeminiFunctionSchema()
+			});
 		}
 		let options: CallGeminiOptions = {
 			url: aiChat.api,
@@ -312,6 +329,7 @@ export default class extends Module {
 				key: aiChat.key,
 			},
 			json: geminiOptions,
+			userId: aiChat.userId,
 		};
 
 		this.log(JSON.stringify(options));
@@ -338,6 +356,50 @@ export default class extends Module {
 			}).json();
 			this.log(JSON.stringify(res_data));
 			const parts = res_data?.candidates?.[0]?.content?.parts;
+			
+			// Function Callsの処理
+			if (Array.isArray(parts) && parts.length > 0) {
+				for (let i = 0; i < parts.length; i++) {
+					const functionCall = parts[i]?.functionCall;
+					if (functionCall) {
+						this.log(`Function call detected: ${functionCall.name}`);
+						const callData: FunctionCall = {
+							name: functionCall.name,
+							arguments: functionCall.args || {}
+						};
+						// userId が指定されていない場合、現在のユーザーIDを自動入力
+						if (functionCall.name === 'users_notes' && !callData.arguments.userId && options.userId) {
+							callData.arguments.userId = options.userId;
+						}
+						const result = await this.functionExecutor!.execute(callData);
+						this.log(`Function result: ${result}`);
+						// 関数の結果をcontentsに追加して再度APIを呼び出す
+						if (options.json.contents) {
+							options.json.contents.push({
+								role: 'model',
+								parts: [{
+									functionCall: {
+										name: callData.name,
+										args: callData.arguments
+									}
+								} as any]
+							});
+							options.json.contents.push({
+								role: 'user',
+								parts: [{
+									functionResponse: {
+										name: callData.name,
+										response: JSON.parse(result)
+									}
+								} as any]
+							});
+							// 再度APIを呼び出す
+							return await this.genTextByGeminiCore(options);
+						}
+					}
+				}
+			}
+			
 			if (Array.isArray(parts) && parts.length > 0) {
 				for (let i = 0; i < parts.length; i++) {
 					// 思考過程を出力したやつの場合、無視
@@ -494,11 +556,13 @@ export default class extends Module {
 	// センシティブメッセージの判定(ユーザー名とホスト名もチェック対象に含む)
 	private isSensitiveMessage(msg: Message): boolean {
 		const checkText = `${msg.user.username}@${msg.user.host}: ${msg.extractedText || msg.text || ''}`;
+		this.log(`DEBUG:isSensitiveMessage check: ${checkText}`);
 		return this.aichatSensitiveWords.some(keyword => checkText.includes(keyword));
 	}
 
 	// センシティブ送信回数を取得
 	private getSensitiveCount(userId: string): number {
+		this.log(`DEBUG:getSensitiveCount check: ${userId}`);
 		let record = this.aichatSensitive?.findOne({ userId });
 		return record ? record.count : 0;
 	}
@@ -507,6 +571,7 @@ export default class extends Module {
 	private incrementSensitiveCount(userId: string): number {
 		let count = this.getSensitiveCount(userId);
 		count += 1;
+		this.log(`DEBUG:incrementSensitiveCount: ${userId} -> ${count}`);
 		this.aichatSensitive?.update({ userId, count });
 		return count;
 	}
@@ -514,27 +579,32 @@ export default class extends Module {
 	private async checkUsableAiChat(msg: Message) {
 		// センシティブ回数チェック(既定の回数を超えた場合、返信しない)
 		if (this.getSensitiveCount(msg.userId) >= SENSITIVE_LIMIT) {
+			this.log(`User ${msg.userId} has exceeded the sensitive message limit.`);
 			return {
 				reaction: 'no_entry_sign'
 			};
 		}
 		// センシティブメッセージ判定(configで指定した文字列かを機械的にチェック)
 		if (this.isSensitiveMessage(msg)) {
-			this.incrementSensitiveCount(msg.userId);
+			const count = this.incrementSensitiveCount(msg.userId);
+			this.log(`User ${msg.userId} sent a sensitive message. Count: ${count}`);
 			return {
 				reaction: 'no_entry_sign'
 			};
 		}
 		// 適当なタイミングでAIによるセンシティブメッセージ判定
 		if (++this.timing >= SENSITIVE_CHECK_TIMING) {
+			this.log(`AI sensitivity check triggered for message from ${msg.userId}(count:${this.timing})`);
 			this.timing = 0;
 			if(await this.isSensitiveCheckAI(msg.extractedText)) {
-				this.incrementSensitiveCount(msg.userId);
+				const count = this.incrementSensitiveCount(msg.userId);
+				this.log(`AI detected sensitive content in message from ${msg.userId}. Count: ${count}`);
 				return {
 					reaction: 'no_entry_sign'
 				};
 			}
 		}
+		this.log(`this.timing: ${this.timing}`);
 		return false;
 	}
 
@@ -777,7 +847,7 @@ export default class extends Module {
 ---\n
 ${memoryText}\n
 ---\n
-この記憶を、重要な点(ユーザーとの約束、ユーザーが気になっているもの(好み)、気にした場所、藍に求めること、記憶してほしいことなど)を残し、記憶の種類ごとに箇条書きで要約してください。この際、AIの挙動や重要でない情報を除き、最大300文字でまとめてください。
+この記憶を、重要な点(ユーザーとの約束、ユーザーが気になっているもの(好み)、気にした場所、藍に求めること、記憶してほしいことなど)を残し、記憶の種類ごとに箇条書きで要約してください。この際、AIの挙動やURLや重要でない情報を除き、最大300文字でまとめてください(返事は不要で、記憶情報のみ返却すること)。
 `;
 		let summary: string = '';
 		// Gemini優先、なければPLaMo
@@ -935,7 +1005,8 @@ ${text}\n
 					key: config.geminiProApiKey,
 					history: exist.history,
 					friendName: friendName,
-					fromMention: exist.fromMention
+					fromMention: exist.fromMention,
+					userId: msg.userId
 				};
 				if (exist.api) {
 					aiChat.api = exist.api;
@@ -959,7 +1030,8 @@ ${text}\n
 					key: config.pLaMoApiKey,
 					history: exist.history,
 					friendName: friendName,
-					fromMention: exist.fromMention
+					fromMention: exist.fromMention,
+					userId: msg.userId
 				};
 				text = await this.genTextByPLaMo(aiChat);
 				break;
@@ -1029,50 +1101,53 @@ ${text}\n
 
 		// --- ここでAIに新しい記憶を生成させて保存 ---
 		// AIに「今までの記憶」「今回の質問」「今回の回答」を渡し、「新しい記憶」を生成するよう依頼
-		this.log('Updating memory...');
-		const memoryPrompt = `
-あなたはユーザーの記憶管理AIです。以下は今までの記憶です。
-${userMemory.join('\n')}
-今回の質問: ${question}
-今回の回答: ${processedText}
-これらを踏まえて、今後の会話に役立つように記憶をアップデートしてください(URLは記録不要、AIができることも記録不要(できることが増える可能性があるため)、ユーザーがどういう人物か、自分がどういう雰囲気を求められているかを重点的に記憶するように)。
-`;
-		let newMemory: string = '';
-		switch (exist.type) {
-			case TYPE_GEMINI:
-				// Gemini APIで記憶生成
-				if (!config.geminiProApiKey) {
-					return false;
-				}
-				const memoryAiChat: AiChat = {
-					question: memoryPrompt,
-					prompt: '',
-					api: GEMINI_25_FLASH_API,
-					key: config.geminiProApiKey,
-					history: [],
-					friendName: friendName,
-					fromMention: true // 記憶の生成はメンションから来たものとする
-				};
-				newMemory = await this.genTextByGemini(memoryAiChat, [], true) ?? '';
-				break;
-			case TYPE_PLAMO:
-				if (!config.pLaMoApiKey) {
-					return false;
-				}
-				const memoryAiChatPlamo: AiChat = {
-					question: memoryPrompt,
-					prompt: '',
-					api: PLAMO_API,
-					key: config.pLaMoApiKey,
-					history: [],
-					friendName: friendName,
-					fromMention: true // 記憶の生成はメンションから来たものとする
-				};
-				newMemory = await this.genTextByPLaMo(memoryAiChatPlamo) ?? '';
-				break;
-			default:
-				break;
-		}
+// 		this.log('Updating memory...');
+// 		const memoryPrompt = `
+// あなたはユーザーの記憶管理AIです。以下は今までの記憶です。
+// ${userMemory.join('\n')}
+// 今回の質問: ${question}
+// 今回の回答: ${processedText}
+// これらを踏まえて、今後の会話に役立つように記憶をアップデートしてください(URLは記録不要、AIができることも記録不要(できることが増える可能性があるため)、ユーザーがどういう人物か、自分がどういう雰囲気を求められているかを重点的に記憶するように)。
+// `;
+		// let newMemory: string = '';
+		// switch (exist.type) {
+		// 	case TYPE_GEMINI:
+		// 		// Gemini APIで記憶生成
+		// 		if (!config.geminiProApiKey) {
+		// 			return false;
+		// 		}
+		// 		const memoryAiChat: AiChat = {
+		// 			question: memoryPrompt,
+		// 			prompt: '',
+		// 			api: GEMINI_25_FLASH_API,
+		// 			key: config.geminiProApiKey,
+		// 			history: [],
+		// 			friendName: friendName,
+		// 			fromMention: true // 記憶の生成はメンションから来たものとする
+		// 		};
+		// 		newMemory = await this.genTextByGemini(memoryAiChat, [], true) ?? '';
+		// 		break;
+		// 	case TYPE_PLAMO:
+		// 		if (!config.pLaMoApiKey) {
+		// 			return false;
+		// 		}
+		// 		const memoryAiChatPlamo: AiChat = {
+		// 			question: memoryPrompt,
+		// 			prompt: '',
+		// 			api: PLAMO_API,
+		// 			key: config.pLaMoApiKey,
+		// 			history: [],
+		// 			friendName: friendName,
+		// 			fromMention: true // 記憶の生成はメンションから来たものとする
+		// 		};
+		// 		newMemory = await this.genTextByPLaMo(memoryAiChatPlamo) ?? '';
+		// 		break;
+		// 	default:
+		// 		break;
+		// }
+		const newMemory = `今回の質問: ${question}
+		今回の回答: ${processedText}
+		`
 		// 新しい記憶を保存
 		if (newMemory && newMemory.trim().length > 0) {
 			await this.addUserMemory(msg.userId, newMemory);
@@ -1104,6 +1179,7 @@ ${userMemory.join('\n')}
 			.replaceAll(/\$$/g, '')// 末尾の$マークはなにかのミスと思われるため削除
 			.replaceAll(/[\}\]]\$ /g, ']')// "}$ "や"]$"も]のミスだと思われる...
 			.replaceAll(/>\[(\w{2}).color/g, '$[$1.color')// colorの指定ミスを訂正
+			.replaceAll(/\$[\{「](\w{2,}\.[a-z0-9=]{4,}) (.+?)[\}」]/g, '$[$1 $2]')// MFM記法の訂正
 			.replaceAll(/\${2,}/g, '')// $が2つ以上続くのはミス
 			.replaceAll(/\$\./g, '')// $.はたぶんミス
 			.replaceAll(/\$\]/g, ']')// "$]"を訂正
