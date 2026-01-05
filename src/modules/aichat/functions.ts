@@ -83,6 +83,57 @@ export const AVAILABLE_FUNCTIONS: FunctionSchema[] = [
 			required: ['userId']
 		},
 		responseFields: ['text']
+	},
+	{
+		name: 'notes_local_timeline',
+		description: 'ローカルタイムラインの投稿一覧を取得します',
+		parameters: {
+			type: 'object',
+			properties: {
+				limit: {
+					type: 'integer',
+					description: '取得する投稿数',
+					minimum: 1,
+					maximum: 100,
+					default: 10
+				},
+				sinceDate: {
+					type: 'integer',
+					description: '指定した日時以降の投稿を取得'
+				},
+				sinceId: {
+					type: 'string',
+					format: 'misskey:id',
+					description: '指定した投稿以降の投稿を取得'
+				},
+				untilDate: {
+					type: 'integer',
+					description: '指定した日時以前の投稿を取得'
+				},
+				untilId: {
+					type: 'string',
+					format: 'misskey:id',
+					description: '指定した投稿以前の投稿を取得'
+				},
+				withFiles: {
+					type: 'boolean',
+					description: 'ファイルを含む投稿のみ取得',
+					default: false
+				},
+				withRenotes: {
+					type: 'boolean',
+					description: 'リノートを含める',
+					default: true
+				},
+				withReplies: {
+					type: 'boolean',
+					description: 'リプライを含める',
+					default: false
+				}
+			},
+			required: []
+		},
+		responseFields: ['text', 'user.name']
 	}
 ];
 

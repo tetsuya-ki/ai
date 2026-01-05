@@ -24,6 +24,8 @@ export default class FunctionExecutor {
 			switch (functionCall.name) {
 				case 'users_notes':
 					return await this.executeUsersNotes(functionCall.arguments);
+				case 'notes_local_timeline':
+					return await this.executeNotesLocalTimeline(functionCall.arguments);
 				default:
 					return JSON.stringify({ error: `Unknown function: ${functionCall.name}` });
 			}
@@ -82,6 +84,49 @@ export default class FunctionExecutor {
 	}
 
 	@bindThis
+	private async executeNotesLocalTimeline(args: Record<string, any>): Promise<string> {
+		this.log(`Fetching local timeline`);
+
+		const params: Record<string, any> = {
+			limit: args.limit ?? 10,
+		};
+
+		// オプショナルパラメータを追加
+		if (args.sinceDate !== undefined) {
+			params.sinceDate = args.sinceDate;
+		}
+		if (args.sinceId !== undefined) {
+			params.sinceId = args.sinceId;
+		}
+		if (args.untilDate !== undefined) {
+			params.untilDate = args.untilDate;
+		}
+		if (args.untilId !== undefined) {
+			params.untilId = args.untilId;
+		}
+		if (args.withFiles !== undefined) {
+			params.withFiles = args.withFiles;
+		}
+		if (args.withRenotes !== undefined) {
+			params.withRenotes = args.withRenotes;
+		}
+		if (args.withReplies !== undefined) {
+			params.withReplies = args.withReplies;
+		}
+
+		try {
+			const result = await this.ai.api('notes/local-timeline', params);
+			// レスポンスフィルタリング
+			const filtered = this.filterResponse('notes_local_timeline', result);
+			return JSON.stringify(filtered);
+		} catch (err: unknown) {
+			const errorMsg = err instanceof Error ? err.message : String(err);
+			this.log(`API error: ${errorMsg}`);
+			throw new Error(`Failed to fetch local timeline: ${errorMsg}`);
+		}
+	}
+
+	@bindThis
 	private filterResponse(functionName: string, response: any): any {
 		// 関数スキーマから responseFields を取得
 		const functionSchema = AVAILABLE_FUNCTIONS.find(f => f.name === functionName);
@@ -91,13 +136,30 @@ export default class FunctionExecutor {
 
 		const responseFields = functionSchema.responseFields;
 
+		// ネストされたフィールドを抽出するヘルパー関数
+		const getNestedValue = (obj: any, path: string): any => {
+			const keys = path.split('.');
+			let value = obj;
+			for (const key of keys) {
+				if (value != null && typeof value === 'object' && key in value) {
+					value = value[key];
+				} else {
+					return undefined;
+				}
+			}
+			return value;
+		};
+
 		// レスポンスが配列の場合、各要素からフィールドを抽出
 		if (Array.isArray(response)) {
 			return response.map(item => {
 				const filtered: Record<string, any> = {};
 				for (const field of responseFields) {
-					if (field in item) {
-						filtered[field] = item[field];
+					const value = getNestedValue(item, field);
+					if (value !== undefined) {
+						// ネストされたフィールドの場合、キーパスの最後の部分をキーとして使用
+						const key = field.includes('.') ? field.split('.').pop()! : field;
+						filtered[key] = value;
 					}
 				}
 				return filtered;
@@ -108,8 +170,10 @@ export default class FunctionExecutor {
 		if (typeof response === 'object' && response !== null) {
 			const filtered: Record<string, any> = {};
 			for (const field of responseFields) {
-				if (field in response) {
-					filtered[field] = response[field];
+				const value = getNestedValue(response, field);
+				if (value !== undefined) {
+					const key = field.includes('.') ? field.split('.').pop()! : field;
+					filtered[key] = value;
 				}
 			}
 			return filtered;
