@@ -375,6 +375,10 @@ export default class extends Module {
 						this.log(`Function result: ${result}`);
 						// 関数の結果をcontentsに追加して再度APIを呼び出す
 						if (options.json.contents) {
+							const parsedResult = JSON.parse(result);
+							// レスポンスが配列の場合、オブジェクトでラップ
+							const responseValue = Array.isArray(parsedResult) ? { items: parsedResult } : parsedResult;
+
 							options.json.contents.push({
 								role: 'model',
 								parts: [{
@@ -389,7 +393,7 @@ export default class extends Module {
 								parts: [{
 									functionResponse: {
 										name: callData.name,
-										response: JSON.parse(result)
+										response: responseValue
 									}
 								} as any]
 							});
