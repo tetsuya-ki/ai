@@ -100,10 +100,21 @@ const GROUNDING_TARGET = 'ggg';
 const YOUTUBE_SITE_URL = 'https://www.youtube.com/';
 const YOUTUBE_SHORT_URL = 'https://youtu.be/';
 
-const GEMINI_25_FLASH_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
-const GEMINI_20_FLASH_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
-const GEMINI_25_PRO_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent';
-// const GEMINI_20_PRO_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-pro:generateContent';
+const GEMINI_PREFIX = 'https://generativelanguage.googleapis.com/v1beta/models/'
+const GEMINI_25_FLASH_MODEL = 'gemini-2.5-flash';
+const GEMINI_FLASH_LATEST_MODEL = 'gemini-flash-latest';
+// const GEMINI_3_FLASH_MODEL = 'gemini-3-flash';// 2026年1月時点ではオススメしない
+const GEMINI_25_PRO_MODEL = 'gemini-2.5-pro';
+const GEMINI_20_FLASH_MODEL = 'gemini-2.0-flash';
+// const GEMINI_25_FLASH_IMAGE_MODEL = 'gemini-2.5-flash-image';// 2026年1月時点では有料APIのみ
+const GEMINI_SUFFIX = ':generateContent';
+const GEMINI_25_FLASH_API = `${GEMINI_PREFIX}${GEMINI_25_FLASH_MODEL}${GEMINI_SUFFIX}`;
+const GEMINI_FLASH_LATEST_API = `${GEMINI_PREFIX}${GEMINI_FLASH_LATEST_MODEL}${GEMINI_SUFFIX}`;
+const GEMINI_25_PRO_API = `${GEMINI_PREFIX}${GEMINI_25_PRO_MODEL}${GEMINI_SUFFIX}`;
+// const GEMINI_20_PRO_API = `${GEMINI_PREFIX}${GEMINI_PRO}${GEMINI_SUFFIX}`;
+const GEMINI_20_FLASH_API = `${GEMINI_PREFIX}${GEMINI_20_FLASH_MODEL}${GEMINI_SUFFIX}`;
+// const GEMINI_25_FLASH_IMAGE_API = `${GEMINI_PREFIX}${GEMINI_25_FLASH_IMAGE_MODEL}${GEMINI_SUFFIX}`;
+
 const PLAMO_API = 'https://api.platform.preferredai.jp/v1/chat/completions';
 
 const RANDOMTALK_DEFAULT_PROBABILITY = 0.02;// デフォルトのrandomTalk確率
@@ -334,10 +345,10 @@ export default class extends Module {
 
 		this.log(JSON.stringify(options));
 		let responseText:string = await this.genTextByGeminiCore(options);
-		// 結果が空文字だった場合、Gemini 2.0 Flashで再実行
+		// 結果が空文字だった場合、Gemini Flash API(最新版)で再実行
 		if (responseText === '') {
-			this.log('一度エラーになったので、GEMINI_20_FLASH_APIで再実行');
-			options.url = GEMINI_20_FLASH_API;
+			this.log('一度エラーになったので、GEMINI_FLASH_LATEST_APIで再実行');
+			options.url = GEMINI_FLASH_LATEST_API;
 			responseText = await this.genTextByGeminiCore(options);
 		}
 		return responseText;
@@ -356,7 +367,7 @@ export default class extends Module {
 			}).json();
 			this.log(JSON.stringify(res_data));
 			const parts = res_data?.candidates?.[0]?.content?.parts;
-			
+
 			// Function Callsの処理
 			if (Array.isArray(parts) && parts.length > 0) {
 				for (let i = 0; i < parts.length; i++) {
@@ -403,7 +414,7 @@ export default class extends Module {
 					}
 				}
 			}
-			
+
 			if (Array.isArray(parts) && parts.length > 0) {
 				for (let i = 0; i < parts.length; i++) {
 					// 思考過程を出力したやつの場合、無視
@@ -618,6 +629,39 @@ export default class extends Module {
 			return false;
 		} else {
 			this.log('AiChat requested');
+		}
+
+		// 画像生成リクエストの場合の処理を実行(記憶機能などはなし。画像生成に失敗した場合は通常のAIチャットにフォールバック)
+		if (msg.includes(['画像生成', 'image', '画像', 'draw', 'generate image'])) {
+			this.log('Image generation requested');
+			try {
+				const prompt = msg.extractedText
+					.replace(new RegExp(this.name, 'i'), '')
+					// .replace(/画像生成|image|画像|draw|generate image/gi, '')
+					.trim();
+
+				const generatedImage = await this.genImageByGemini(prompt);
+				if (generatedImage) {
+					const file = await this.ai.upload(generatedImage, {
+						filename: 'generated-image.png',
+						contentType: 'image/png'
+					});
+
+					const modelName = GEMINI_20_FLASH_MODEL;
+					this.log('Replying with generated image...');
+					msg.reply(`画像を生成しました！\n#AiImage #${modelName}`, { file });
+
+					return {
+						reaction: 'like'
+					};
+				}
+			} catch (err) {
+				this.log(`Image generation error: ${err}`);
+				msg.reply('申し訳ございません、画像生成に失敗してしまいました...');
+				return {
+					reaction: 'confused'
+				};
+			}
 		}
 
 		// センシティブメッセージ判定
@@ -1189,9 +1233,120 @@ ${text}\n
 			.replaceAll(/\$\]/g, ']')// "$]"を訂正
 			.replaceAll(/\\text\{(.+?)\}/ig, '$1')// 謎の\text{xxx}構文を削除
 			.replaceAll(/。,+/ig, '。')// 。のあとの,連続について補正
-			.replaceAll(/\$\[fg\.color=#([a-f0-9]{3} .+?)\]/g, '$[fg.color=$1 ]')// fg.colorで#がついちゃうやつ
+			.replaceAll(/\$\[fg\.color=#([a-f0-9]{3,} .+?)\]/g, '$[fg.color=$1]')// fg.colorで#がついちゃうやつ
+			.replaceAll(/\$\[fg\.color=([a-f0-9]{3,6}) [:;：；](.+?)\]/g, '$[fg.color=$1 $2]')// fg.colorで:がついちゃうやつ
 			.replaceAll(/XXXXXXXXXXXX/g, '');
 		return message;
+	}
+
+	@bindThis
+	private async genImageByGemini(prompt: string): Promise<Buffer | null> {
+		try {
+			if (!config.geminiProApiKey) {
+				this.log('Gemini API key not configured');
+				return null;
+			}
+
+			this.log(`Calling Gemini Image API (${GEMINI_20_FLASH_MODEL})...`);
+			const requestForGeminiImage:any = {
+				headers: {
+					'x-goog-api-key': config.geminiProApiKey,
+					'Content-Type': 'application/json'
+				},
+				json: {
+					contents: [{
+						parts: [
+							{ text: prompt }
+						]
+					}]
+				}
+			};
+			this.log('URL: ' + GEMINI_20_FLASH_API + '\nOptions: ' + JSON.stringify(requestForGeminiImage, null, 2).trim());
+
+			const response = await got.post(GEMINI_20_FLASH_API, requestForGeminiImage);
+			const data = response.body as any;
+			const imageData = data?.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+
+			if (!imageData) {
+				this.log('No image data in response');
+				return null;
+			}
+
+			// Base64データからBufferに変換
+			const imageBuffer = Buffer.from(imageData, 'base64');
+			// 画像にテキストを追加
+			const finalImage = await this.addTextToImage(imageBuffer);
+			return finalImage;
+		} catch (err: unknown) {
+			const errorMsg = err instanceof Error ? err.message : String(err);
+			this.log(`Image generation error: ${errorMsg}`);
+			if (err instanceof HTTPError) {
+				// HTTPErrorの場合、レスポンスのボディを取得
+				this.log(`HTTP Error: ${err.response.statusCode} ${err.response.statusMessage}`);
+				// レスポンスのボディからエラーメッセージを取得
+				if (err.response.body) {
+					let responseText = err.response.body.toString();
+					try {
+						const errorData = JSON.parse(responseText);
+						if (errorData.error && errorData.error.message) {
+							responseText = errorData.error.message;
+						}
+					} catch (jsonErr) {
+						this.log('Failed to parse error response as JSON');
+					}
+					this.log(`Response Body: ${responseText}`);
+				}
+			} else if (err instanceof Error) {
+				this.log(`${err.name}\n${err.message}\n${err.stack}`);
+			}
+			return null;
+		}
+	}
+
+	@bindThis
+	private async addTextToImage(imageBuffer: Buffer): Promise<Buffer> {
+		try {
+			const { createCanvas, loadImage, registerFont } = await import('canvas');
+			registerFont('./font.ttf', { family: 'CustomFont' });
+			const image = await loadImage(imageBuffer);
+			const width = image.width + 400;
+			const height = image.height + 200;
+
+			const canvas = createCanvas(width, height);
+			const ctx = canvas.getContext('2d');
+			// 背景色
+			ctx.fillStyle = 'rgba(67, 67, 67, 0.95)';
+			ctx.fillRect(0, 0, width, height);
+
+			// 元画像を描画
+			ctx.drawImage(image, 200, 100);
+
+			// サーバー名とAI名を描画
+			const serverName = new URL(config.host).hostname;
+			const fontSize = 32;
+
+			// アカウントをフェッチ
+			const me:any = await (async () => {
+				return await got.post(`${config.apiUrl}/i`, {
+				json: {
+					i: config.i
+				}
+			}).json()})();
+			const aiName = me?.username || '藍';
+			ctx.font = `bold ${fontSize}px CustomFont`;
+			ctx.fillStyle = '#e0e4cc';
+			ctx.textAlign = 'left';
+
+			// サーバー名
+			ctx.fillText(`Server: ${serverName}`, 20, 60);
+			// AI名
+			ctx.fillText(`Generated by: ${aiName}`, 20, height - 30);
+			return canvas.toBuffer('image/png');
+		} catch (err: unknown) {
+			const errorMsg = err instanceof Error ? err.message : String(err);
+			this.log(`Failed to add text to image: ${errorMsg}`);
+			return imageBuffer;
+		}
 	}
 
 	@bindThis
